@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data_integration_process"
+version = "0.1.0"
+description = "Prefect-based XML data integration process with archive, classification, validation, and audit state."
+requires-python = ">=3.11"
+dependencies = [
+    "prefect",
+    "sqlalchemy",
+    "alembic",
+    "pydantic",
+    "pydantic-settings",
+    "defusedxml",
+    "portalocker",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pyfakefs",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

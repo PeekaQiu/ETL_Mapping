@@ -1,0 +1,25 @@
+{
+  "name": "bulk-sources-controller",
+  "flow_configs": [
+    {
+      "name": "bulk-source-1",
+      "config_variable": "bulk_source_1_config",
+      "enabled": true
+    },
+    {
+      "name": "bulk-source-2",
+      "config_variable": "bulk_source_2_config",
+      "enabled": true
+    },
+    {
+      "name": "bulk-source-3",
+      "config_variable": "bulk_source_3_config",
+      "enabled": true
+    }
+  ],
+  "loop": {
+    "delay_seconds": 10,
+    "cycles": null,
+    "stop_on_failure": false
+  }
+}

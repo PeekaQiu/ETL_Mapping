@@ -1,0 +1,110 @@
+{
+  "directories": {
+    "source_dirs": [
+      "runtime/bulk_xml_test/source_2"
+    ],
+    "archive_dir": "runtime/bulk_xml_test/flow_2/archive",
+    "staging_dir": "runtime/bulk_xml_test/flow_2/staging",
+    "output_root": "runtime/bulk_xml_test/flow_2/output",
+    "quarantine_dir": "runtime/bulk_xml_test/flow_2/quarantine",
+    "sqlite_path": "runtime/bulk_xml_test/flow_2/integration_run.sqlite3",
+    "lock_file": "runtime/bulk_xml_test/flow_2/integration.lock"
+  },
+  "runtime": {
+    "file_stability_seconds": 0,
+    "archive_retention_days": 10,
+    "no_overlap": true
+  },
+  "rules": [
+    {
+      "rule_id": "source_2_invoice",
+      "description": "Source 2 normal invoice documents from TLO2 with USD currency.",
+      "target_path_template": "source_2/usd_invoices/{yyyy}/{mm}/{invoice_number}.xml",
+      "conditions": {
+        "all": [
+          {
+            "xpath": "/Envelope/Header/Sender/CompanyCode",
+            "type": "str",
+            "transform": "upper",
+            "op": "eq",
+            "value": "TLO2"
+          },
+          {
+            "xpath": "/Envelope/Body/Documents/Document/Metadata/SourceDirectory",
+            "type": "str",
+            "op": "eq",
+            "value": "source_2"
+          },
+          {
+            "xpath": "/Envelope/Body/Documents/Document/Metadata/DocumentType",
+            "type": "str",
+            "transform": "upper",
+            "op": "eq",
+            "value": "INVOICE"
+          },
+          {
+            "xpath": "/Envelope/Body/Documents/Document/Amounts/Currency",
+            "type": "str",
+            "transform": "upper",
+            "op": "eq",
+            "value": "USD"
+          },
+          {
+            "xpath": "/Envelope/Body/Documents/Document/Identifiers/InvoiceNumber",
+            "type": "str",
+            "op": "regex",
+            "value": "^INV-\\d{6}$",
+            "alias": "invoice_number"
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "source_2_credit_note",
+      "description": "Source 2 credit note documents from TLO2 with USD currency.",
+      "target_path_template": "source_2/usd_credit_notes/{yyyy}/{mm}/{invoice_number}.xml",
+      "conditions": {
+        "all": [
+          {
+            "xpath": "/Envelope/Header/Sender/CompanyCode",
+            "type": "str",
+            "transform": "upper",
+            "op": "eq",
+            "value": "TLO2"
+          },
+          {
+            "xpath": "/Envelope/Body/Documents/Document/Metadata/SourceDirectory",
+            "type": "str",
+            "op": "eq",
+            "value": "source_2"
+          },
+          {
+            "xpath": "/Envelope/Body/Documents/Document/Metadata/DocumentType",
+            "type": "str",
+            "transform": "upper",
+            "op": "eq",
+            "value": "CREDIT_NOTE"
+          },
+          {
+            "xpath": "/Envelope/Body/Documents/Document/Amounts/Currency",
+            "type": "str",
+            "transform": "upper",
+            "op": "eq",
+            "value": "USD"
+          },
+          {
+            "xpath": "/Envelope/Body/Documents/Document/Identifiers/InvoiceNumber",
+            "type": "str",
+            "op": "regex",
+            "value": "^INV-\\d{6}$",
+            "alias": "invoice_number"
+          }
+        ]
+      }
+    }
+  ],
+  "notifications": {
+    "dry_run": true,
+    "recipients": []
+  }
+}

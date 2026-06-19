@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 
 from scripts._runtime import (
     GracefulStop,
@@ -14,6 +13,7 @@ from scripts._runtime import (
     load_controller,
     resolve_path,
 )
+from data_integration.logging_setup import log_fields
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,15 @@ def main(argv: list[str] | None = None) -> int:
     if max_cycles is None:
         max_cycles = controller.loop.cycles
     stop_on_failure = args.stop_on_failure or controller.loop.stop_on_failure
+    logger.info(
+        "Integration loop configured | %s",
+        log_fields(
+            controller=controller_path,
+            delay_seconds=delay_seconds,
+            max_cycles=max_cycles or "unlimited",
+            stop_on_failure=stop_on_failure,
+        ),
+    )
 
     from data_integration.flows.integration_loop import run_integration_cycle
 

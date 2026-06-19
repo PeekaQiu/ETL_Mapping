@@ -56,7 +56,7 @@ def test_pipeline_prepublishes_before_scheduled_publish(tmp_path: Path) -> None:
     validate_and_prepublish_run_impl(config, repository, run_id)
 
     prepublished_file = repository.get_run_files(run_id)[0]
-    assert repository.get_run(run_id).status == ProcessingRunStatus.VALIDATED.value
+    assert repository.get_run(run_id).status == ProcessingRunStatus.PREPUBLISHED.value
     assert prepublished_file.status == FileStatus.PREPUBLISHED.value
     assert prepublished_file.prepublish_path is not None
     assert Path(prepublished_file.prepublish_path).exists()
@@ -243,7 +243,7 @@ def test_archive_reuses_discovered_record_left_by_interrupted_copy(tmp_path: Pat
     assert recovered_run_id is not None
     files = repository.get_run_files(recovered_run_id)
     assert len(files) == 1
-    assert files[0].status == FileStatus.ARCHIVED_B.value
+    assert files[0].status == FileStatus.ARCHIVED.value
 
 
 def test_classification_persists_versioned_paths_for_supplement_mode(tmp_path: Path) -> None:

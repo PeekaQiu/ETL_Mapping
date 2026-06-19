@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 
 from scripts._runtime import (
     GracefulStop,
@@ -14,6 +13,7 @@ from scripts._runtime import (
     load_controller,
     resolve_path,
 )
+from data_integration.logging_setup import log_fields
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,17 @@ def main(argv: list[str] | None = None) -> int:
     max_cycles = 1 if args.once else args.cycles
     if max_cycles is None:
         max_cycles = controller.loop.cycles
+    stop_on_failure = args.stop_on_failure or controller.loop.stop_on_failure
+    logger.info(
+        "Publish loop configured | %s",
+        log_fields(
+            controller=controller_path,
+            delay_seconds=delay_seconds,
+            max_cycles=max_cycles or "unlimited",
+            stop_on_failure=stop_on_failure,
+            source_filter=args.source or "all",
+        ),
+    )
 
     from data_integration.flows.publish import run_publish_cycle
 
@@ -76,12 +87,12 @@ def main(argv: list[str] | None = None) -> int:
                 results = run_publish_cycle(
                     controller_config_path=str(controller_path.relative_to(project_root)),
                     source_names=args.source or None,
-                    stop_on_failure=args.stop_on_failure,
+                    stop_on_failure=stop_on_failure,
                 )
             except Exception:
                 logger.exception("Publish cycle flow failed.")
                 cycle_failed = True
-                if args.stop_on_failure:
+                if stop_on_failure:
                     return 1
             else:
                 for source_name, published_count in results.items():

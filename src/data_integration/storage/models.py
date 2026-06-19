@@ -13,22 +13,25 @@ class Base(DeclarativeBase):
 
 
 class ProcessingRunStatus(StrEnum):
+    """Run-level lifecycle; advances with the pipeline, not per-file."""
+
     CREATED = "CREATED"
+    EMPTY = "EMPTY"
     ARCHIVED = "ARCHIVED"
     CLASSIFIED = "CLASSIFIED"
-    VALIDATED = "VALIDATED"
+    PREPUBLISHED = "PREPUBLISHED"
     PUBLISHED = "PUBLISHED"
     COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
     FAILED = "FAILED"
-    EMPTY = "EMPTY"
 
 
 class FileStatus(StrEnum):
+    """Per-file lifecycle from discovery through publish or quarantine."""
+
     DISCOVERED = "DISCOVERED"
-    ARCHIVED_B = "ARCHIVED_B"
+    ARCHIVED = "ARCHIVED"
     CLASSIFIED_STAGING = "CLASSIFIED_STAGING"
     PREPUBLISHED = "PREPUBLISHED"
-    VALIDATED = "VALIDATED"
     PUBLISHED = "PUBLISHED"
     SUPERSEDED = "SUPERSEDED"
     FAILED = "FAILED"

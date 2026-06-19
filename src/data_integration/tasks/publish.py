@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
+from typing import Any
 
-from prefect import get_run_logger, task
+from prefect import task
 
 from data_integration.config.schema import IntegrationConfig
 from data_integration.files.safety import move_to_quarantine, promote_file, sha256_file
+from data_integration.logging_setup import log_fields, task_logger
+from data_integration.prefect_ui import TASK_PUBLISH_PREPUBLISHED, TASK_PUBLISH_PREPUBLISHED_DESC
 from data_integration.storage.db import build_engine, build_session_factory, init_db
 from data_integration.storage.models import FileRecord, FileStatus, ProcessingRunStatus
 from data_integration.storage.repository import IntegrationRepository
 
+_LOGGER = task_logger(__name__)
 
-@task(name="Publish Prepublished Files", retries=0)
+
+@task(name=TASK_PUBLISH_PREPUBLISHED, description=TASK_PUBLISH_PREPUBLISHED_DESC, retries=0)
 def publish_prepublished_files(config: IntegrationConfig, run_id: str | None = None) -> int:
     engine = build_engine(config.directories.sqlite_path)
     init_db(engine)
@@ -26,19 +30,28 @@ def publish_prepublished_run_impl(
     *,
     run_id: str | None = None,
 ) -> int:
-    logger = _logger()
+    logger = _LOGGER
     prepublished_files = _get_prepublished_files(repository, run_id=run_id)
+    scope = run_id or "all"
     if not prepublished_files:
+        logger.info("No prepublished files pending formal publish | %s", log_fields(scope=scope))
         return 0
+
+    logger.info(
+        "Starting formal publish | %s",
+        log_fields(scope=scope, pending_count=len(prepublished_files)),
+    )
 
     failures: list[str] = []
     published_count = 0
+    superseded_count = 0
     touched_run_ids: set[str] = set()
 
     for record in sorted(prepublished_files, key=_publish_sort_key):
         touched_run_ids.add(record.run_id)
+        source_name = Path(record.source_path).name
 
-        superseding_record = _get_superseding_replace_record(repository, record)
+        superseding_record = repository.get_superseding_replace_record(record)
         if superseding_record is not None:
             repository.mark_file_superseded(
                 record.id,
@@ -48,18 +61,30 @@ def publish_prepublished_run_impl(
                     f"{superseding_record.config_revision} for {superseding_record.logical_target_path}"
                 ),
             )
+            superseded_count += 1
+            logger.debug(
+                "Skipped publish; file superseded | %s",
+                log_fields(
+                    run_id=record.run_id,
+                    source=source_name,
+                    superseded_by=superseding_record.id,
+                ),
+            )
             continue
 
         file_errors = _validate_prepublished_file(record)
         if file_errors:
             failures.extend(file_errors)
             _quarantine_prepublished_file(config, repository, record, "; ".join(file_errors))
+            logger.warning(
+                "Prepublish validation failed before formal publish | %s",
+                log_fields(run_id=record.run_id, source=source_name, errors="; ".join(file_errors)),
+            )
             continue
 
         prepublish_path = Path(record.prepublish_path or "")
         target_path = Path(record.target_path or "")
         try:
-            repository.mark_file_validated(record.id)
             promote_file(
                 prepublish_path,
                 target_path,
@@ -68,23 +93,43 @@ def publish_prepublished_run_impl(
             )
             repository.mark_file_published(record.id, target_path)
             published_count += 1
+            logger.debug(
+                "File formally published | %s",
+                log_fields(
+                    run_id=record.run_id,
+                    source=source_name,
+                    target=target_path,
+                    publish_mode=record.publish_mode,
+                ),
+            )
         except Exception as exc:
             message = f"formal publish failed: {exc}"
-            failures.append(f"{Path(record.source_path).name}: {message}")
+            failures.append(f"{source_name}: {message}")
             _quarantine_prepublished_file(config, repository, record, message)
+            logger.warning(
+                "Formal publish failed | %s",
+                log_fields(run_id=record.run_id, source=source_name, error=str(exc)),
+            )
 
     for current_run_id in touched_run_ids:
-        _finalize_run_after_publish(repository, current_run_id)
+        _finalize_run_after_publish(repository, current_run_id, logger)
 
     if failures:
         logger.warning(
-            "Published %s of %s prepublished file(s); %s failed.",
-            published_count,
-            len(prepublished_files),
-            len(failures),
+            "Formal publish complete with failures | %s",
+            log_fields(
+                scope=scope,
+                published=published_count,
+                pending=len(prepublished_files),
+                failed=len(failures),
+                superseded=superseded_count,
+            ),
         )
     else:
-        logger.info("Published %s prepublished file(s).", published_count)
+        logger.info(
+            "Formal publish complete | %s",
+            log_fields(scope=scope, published=published_count, superseded=superseded_count),
+        )
     return published_count
 
 
@@ -147,32 +192,28 @@ def _quarantine_prepublished_file(
     repository.mark_file_failed(record.id, message)
 
 
-def _get_superseding_replace_record(
-    repository: IntegrationRepository,
-    record: FileRecord,
-) -> FileRecord | None:
-    if record.publish_mode != "replace" or not record.logical_target_path:
-        return None
-    latest = repository.get_latest_replace_file(
-        source_path=Path(record.source_path),
-        sha256=record.sha256,
-        logical_target_path=Path(record.logical_target_path),
-    )
-    if latest is None or latest.id == record.id:
-        return None
-    return latest
-
-
-def _finalize_run_after_publish(repository: IntegrationRepository, run_id: str) -> None:
+def _finalize_run_after_publish(repository: IntegrationRepository, run_id: str, logger: Any) -> None:
     files = repository.get_run_files(run_id)
     statuses = {record.status for record in files}
     if FileStatus.PREPUBLISHED.value in statuses or FileStatus.CLASSIFIED_STAGING.value in statuses:
+        logger.debug(
+            "Run still has pending files after publish | %s",
+            log_fields(run_id=run_id, statuses=sorted(statuses)),
+        )
         return
     if FileStatus.FAILED.value in statuses or FileStatus.QUARANTINED.value in statuses:
         repository.mark_run(run_id, ProcessingRunStatus.COMPLETED_WITH_ERRORS)
+        logger.info(
+            "Run finalized with errors | %s",
+            log_fields(run_id=run_id, status=ProcessingRunStatus.COMPLETED_WITH_ERRORS.value),
+        )
         return
     if FileStatus.PUBLISHED.value in statuses:
         repository.mark_run(run_id, ProcessingRunStatus.PUBLISHED)
+        logger.info(
+            "Run finalized as published | %s",
+            log_fields(run_id=run_id, status=ProcessingRunStatus.PUBLISHED.value),
+        )
         return
     if statuses and statuses <= {FileStatus.SUPERSEDED.value}:
         repository.mark_run(
@@ -180,10 +221,7 @@ def _finalize_run_after_publish(repository: IntegrationRepository, run_id: str) 
             ProcessingRunStatus.COMPLETED_WITH_ERRORS,
             "All prepublished files were superseded by newer revisions.",
         )
-
-
-def _logger() -> logging.Logger:
-    try:
-        return get_run_logger()
-    except Exception:
-        return logging.getLogger(__name__)
+        logger.info(
+            "Run finalized; all files superseded | %s",
+            log_fields(run_id=run_id, status=ProcessingRunStatus.COMPLETED_WITH_ERRORS.value),
+        )

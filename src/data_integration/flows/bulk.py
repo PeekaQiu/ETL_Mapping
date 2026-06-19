@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-import logging
 import time
 
-from prefect import flow, get_run_logger
+from prefect import flow
 
 from data_integration.config.loader import DEFAULT_BULK_CONFIG_VARIABLE, load_bulk_config
 from data_integration.config.schema import BulkIntegrationConfig, FlowConfigRef
-from data_integration.flows.main import run_data_integration_impl
+from data_integration.logging_setup import log_fields, task_logger
+from data_integration.prefect_ui import (
+    FLOW_BULK_CONTROLLER,
+    FLOW_BULK_CONTROLLER_DESC,
+    source_integrate_desc,
+    source_integrate_name,
+)
 from data_integration.tasks.source_run import integrate_source
 
+_LOGGER = task_logger(__name__)
 
-@flow(name="bulk-sources-controller")
+
+@flow(name=FLOW_BULK_CONTROLLER, description=FLOW_BULK_CONTROLLER_DESC)
 def run_bulk_sources_once(
     controller_config_variable: str = DEFAULT_BULK_CONFIG_VARIABLE,
     controller_config_path: str | None = None,
@@ -29,7 +36,7 @@ def run_bulk_sources_loop(
     controller_config_variable: str = DEFAULT_BULK_CONFIG_VARIABLE,
     controller_config_path: str | None = None,
 ) -> None:
-    logger = logging.getLogger(__name__)
+    logger = _LOGGER
     cycle = 0
     while True:
         controller = load_bulk_config(
@@ -37,7 +44,10 @@ def run_bulk_sources_loop(
             config_path=controller_config_path,
         )
         cycle += 1
-        logger.info("Starting bulk controller cycle %s.", cycle)
+        logger.info(
+            "Bulk controller cycle starting | %s",
+            log_fields(cycle=cycle, enabled_sources=sum(1 for f in controller.flow_configs if f.enabled)),
+        )
         run_bulk_sources_once(
             controller_config_variable=controller_config_variable,
             controller_config_path=controller_config_path,
@@ -45,32 +55,53 @@ def run_bulk_sources_loop(
         )
 
         if controller.loop.cycles is not None and cycle >= controller.loop.cycles:
-            logger.info("Bulk loop reached configured cycle count: %s.", controller.loop.cycles)
+            logger.info("Bulk loop reached cycle limit | %s", log_fields(cycles=controller.loop.cycles))
             return
 
-        logger.info("All source flows completed. External loop sleeping %s second(s).", controller.loop.delay_seconds)
+        logger.info(
+            "Bulk cycle finished; sleeping | %s",
+            log_fields(cycle=cycle, delay_seconds=controller.loop.delay_seconds),
+        )
         time.sleep(controller.loop.delay_seconds)
 
 
 def run_bulk_sources_once_impl(controller: BulkIntegrationConfig) -> dict[str, str | None]:
-    logger = _logger()
+    logger = _LOGGER
     results: dict[str, str | None] = {}
     for flow_config in controller.flow_configs:
         if not flow_config.enabled:
-            logger.info("Skipping disabled source flow config: %s.", flow_config.name)
+            logger.info("Skipping disabled source | %s", log_fields(source=flow_config.name))
             continue
         try:
             results[flow_config.name] = _run_single_source(flow_config)
         except Exception as exc:
             results[flow_config.name] = None
             if controller.loop.stop_on_failure:
+                logger.exception(
+                    "Bulk source failed; stopping controller | %s",
+                    log_fields(source=flow_config.name, error=str(exc)),
+                )
                 raise
-            logger.exception("Source flow failed but controller is configured to continue: %s", flow_config.name)
+            logger.exception(
+                "Bulk source failed; continuing | %s",
+                log_fields(source=flow_config.name, error=str(exc)),
+            )
+    logger.info(
+        "Bulk controller cycle finished | %s",
+        log_fields(
+            processed=len(results),
+            with_work=sum(1 for run_id in results.values() if run_id is not None),
+            without_run=sum(1 for run_id in results.values() if run_id is None),
+        ),
+    )
     return results
 
 
 def _run_single_source(flow_config: FlowConfigRef) -> str | None:
-    source_task = integrate_source.with_options(name=f"{flow_config.name} - Integrate Source")
+    source_task = integrate_source.with_options(
+        name=source_integrate_name(flow_config.name),
+        description=source_integrate_desc(flow_config.name),
+    )
     if flow_config.config_variable:
         return source_task(
             config_variable=flow_config.config_variable,
@@ -78,10 +109,3 @@ def _run_single_source(flow_config: FlowConfigRef) -> str | None:
             source_name=flow_config.name,
         )
     return source_task(config_path=flow_config.config_path, source_name=flow_config.name)
-
-
-def _logger() -> logging.Logger:
-    try:
-        return get_run_logger()
-    except Exception:
-        return logging.getLogger(__name__)

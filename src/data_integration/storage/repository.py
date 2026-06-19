@@ -37,14 +37,12 @@ _ACTIVE_REPLACE_COLLISION_STATUSES = frozenset(
     {
         FileStatus.CLASSIFIED_STAGING.value,
         FileStatus.PREPUBLISHED.value,
-        FileStatus.VALIDATED.value,
     }
 )
 _ACTIVE_FINAL_TARGET_STATUSES = frozenset(
     {
         FileStatus.CLASSIFIED_STAGING.value,
         FileStatus.PREPUBLISHED.value,
-        FileStatus.VALIDATED.value,
         FileStatus.PUBLISHED.value,
     }
 )
@@ -148,7 +146,7 @@ class IntegrationRepository:
         with self._session_factory.begin() as session:
             record = self._get_file(session, file_id)
             record.archive_path = str(archive_path)
-            record.status = FileStatus.ARCHIVED_B.value
+            record.status = FileStatus.ARCHIVED.value
             record.error_message = None
 
     def get_run_files(self, run_id: str, statuses: Iterable[FileStatus] | None = None) -> list[FileRecord]:
@@ -225,9 +223,6 @@ class IntegrationRepository:
             record.prepublish_path = str(prepublish_path)
             record.status = FileStatus.PREPUBLISHED.value
             record.error_message = None
-
-    def mark_file_validated(self, file_id: int) -> None:
-        self._mark_file_status(file_id, FileStatus.VALIDATED)
 
     def mark_file_published(self, file_id: int, target_path: Path) -> None:
         with self._session_factory.begin() as session:
@@ -308,16 +303,31 @@ class IntegrationRepository:
             session.expunge(record)
             return record
 
+    def get_superseding_replace_record(self, record: FileRecord) -> FileRecord | None:
+        if record.publish_mode != "replace" or not record.logical_target_path:
+            return None
+        latest = self.get_latest_replace_file(
+            source_path=Path(record.source_path),
+            sha256=record.sha256,
+            logical_target_path=Path(record.logical_target_path),
+        )
+        if latest is None or latest.id == record.id:
+            return None
+        return latest
+
     def summarize_run(self, run_id: str) -> dict:
         files = self.get_run_files(run_id)
         by_status: dict[str, int] = {}
         success = 0
+        ready_to_publish = 0
         failed = 0
         failed_files: list[dict[str, str | None]] = []
         for record in files:
             by_status[record.status] = by_status.get(record.status, 0) + 1
             if record.status == FileStatus.PUBLISHED.value:
                 success += 1
+            elif record.status == FileStatus.PREPUBLISHED.value:
+                ready_to_publish += 1
             elif record.status in _RETRYABLE_FILE_STATUSES:
                 failed += 1
                 failed_files.append(
@@ -331,6 +341,7 @@ class IntegrationRepository:
         return {
             "total": len(files),
             "success": success,
+            "ready_to_publish": ready_to_publish,
             "failed": failed,
             "failed_files": failed_files,
             "by_status": by_status,
@@ -342,11 +353,6 @@ class IntegrationRepository:
             rule_result = session.execute(delete(RuleMatch).where(RuleMatch.file_id.in_(old_file_ids)))
             validation_result = session.execute(delete(ValidationEvent).where(ValidationEvent.created_at < cutoff))
             return (rule_result.rowcount or 0) + (validation_result.rowcount or 0)
-
-    def _mark_file_status(self, file_id: int, status: FileStatus) -> None:
-        with self._session_factory.begin() as session:
-            record = self._get_file(session, file_id)
-            record.status = status.value
 
     @staticmethod
     def new_run_id() -> str:

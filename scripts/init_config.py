@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 
 from scripts._runtime import (
+    add_common_args,
     bootstrap,
     configure_logging,
     default_controller_variable,
     resolve_path,
 )
+from data_integration.logging_setup import log_fields
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate local integration configs and optionally load them into Prefect Variables.",
     )
-    parser.add_argument(
-        "--controller",
-        default="config/bulk_sources_controller.json",
-        help="Bulk controller config file path.",
-    )
+    add_common_args(parser)
     parser.add_argument(
         "--controller-variable",
         default=default_controller_variable(),
@@ -44,7 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Create runtime directories declared in source configs.",
     )
-    parser.add_argument("-v", "--verbose", action="store_true")
     return parser
 
 
@@ -54,6 +50,16 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(args.verbose)
 
     controller_path = resolve_path(args.controller, project_root=project_root)
+    logger.info(
+        "Config refresh CLI starting | %s",
+        log_fields(
+            controller=controller_path,
+            controller_variable=args.controller_variable,
+            dry_run=args.dry_run,
+            overwrite=args.overwrite,
+            prepare_dirs=args.prepare_dirs,
+        ),
+    )
     try:
         from data_integration.flows.config_refresh import refresh_config
 
@@ -65,9 +71,10 @@ def main(argv: list[str] | None = None) -> int:
             prepare_dirs=args.prepare_dirs,
         )
     except Exception as exc:
-        logger.error("Config refresh failed: %s", exc)
+        logger.error("Config refresh failed | %s", log_fields(error=str(exc)))
         return 1
 
+    logger.info("Config refresh CLI finished successfully.")
     return 0
 
 

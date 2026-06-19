@@ -10,9 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "prefect",
     "sqlalchemy",
-    "alembic",
     "pydantic",
-    "pydantic-settings",
     "defusedxml",
     "portalocker",
 ]

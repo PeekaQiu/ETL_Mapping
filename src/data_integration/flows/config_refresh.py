@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from prefect import flow, get_run_logger
+from prefect import flow
 
 from data_integration.config.loader import (
     DEFAULT_BULK_CONFIG_VARIABLE,
@@ -18,9 +16,16 @@ from data_integration.flows.controller import (
     resolve_project_path,
     validate_source_configs,
 )
+from data_integration.logging_setup import log_fields, task_logger
+from data_integration.prefect_ui import (
+    FLOW_CONFIG_REFRESH,
+    FLOW_CONFIG_REFRESH_DESC,
+)
+
+_LOGGER = task_logger(__name__)
 
 
-@flow(name="config-refresh")
+@flow(name=FLOW_CONFIG_REFRESH, description=FLOW_CONFIG_REFRESH_DESC)
 def refresh_config(
     controller_config_path: str = DEFAULT_BULK_CONTROLLER_CONFIG_PATH,
     controller_variable_name: str = DEFAULT_BULK_CONFIG_VARIABLE,
@@ -29,30 +34,37 @@ def refresh_config(
     dry_run: bool = False,
     prepare_dirs: bool = False,
 ) -> dict[str, object]:
-    logger = get_run_logger()
+    logger = _LOGGER
     root = project_root()
     controller_path = resolve_project_path(controller_config_path, root)
     controller = load_controller(controller_path)
     sources = iter_enabled_sources(controller, project_root_path=root)
 
+    logger.info(
+        "Config refresh starting | %s",
+        log_fields(
+            controller=controller_path,
+            source_count=len(sources),
+            dry_run=dry_run,
+            overwrite=overwrite,
+            prepare_dirs=prepare_dirs,
+        ),
+    )
+
     if prepare_dirs:
         validate_source_configs(sources)
+        logger.info("Runtime directories prepared for all enabled sources.")
     else:
         for source_name, config_path in sources:
             if not config_path.is_file():
                 raise FileNotFoundError(f"source config not found for {source_name}: {config_path}")
             read_config_file(config_path)
 
-    logger.info(
-        "Validated controller %s with %s enabled source flow(s).",
-        controller_path,
-        len(sources),
-    )
     for source_name, config_path in sources:
-        logger.info("  - %s -> %s", source_name, config_path)
+        logger.debug("Validated source config | %s", log_fields(source=source_name, config=config_path))
 
     if dry_run:
-        logger.info("Dry run complete; Prefect Variables were not modified.")
+        logger.info("Config refresh dry run complete; Prefect Variables unchanged.")
         return {
             "controller_path": str(controller_path),
             "source_count": len(sources),
@@ -66,9 +78,12 @@ def refresh_config(
         overwrite=overwrite,
     )
     logger.info(
-        "Loaded %s source config variable(s) and controller variable %s.",
-        len(initialized_sources),
-        controller_variable_name,
+        "Config refresh complete | %s",
+        log_fields(
+            controller_variable=controller_variable_name,
+            source_variables=len(initialized_sources),
+            sources=sorted(initialized_sources),
+        ),
     )
     return {
         "controller_variable": controller_variable_name,

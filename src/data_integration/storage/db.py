@@ -20,6 +20,7 @@ def build_engine(sqlite_path: Path) -> Engine:
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     _ensure_files_schema(engine)
+    _normalize_legacy_status_values(engine)
 
 
 def build_session_factory(engine: Engine) -> sessionmaker[Session]:
@@ -130,3 +131,17 @@ def _ensure_files_schema(engine: Engine) -> None:
         connection.exec_driver_sql("CREATE INDEX ix_files_final_target_path ON files (final_target_path)")
         connection.exec_driver_sql("CREATE INDEX ix_files_superseded_by_file_id ON files (superseded_by_file_id)")
         connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
+def _normalize_legacy_status_values(engine: Engine) -> None:
+    # ponytail: one-shot SQL renames; safe to re-run (idempotent WHERE clauses)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE files SET status = 'ARCHIVED' WHERE status = 'ARCHIVED_B'"
+        )
+        connection.exec_driver_sql(
+            "UPDATE files SET status = 'PREPUBLISHED' WHERE status = 'VALIDATED'"
+        )
+        connection.exec_driver_sql(
+            "UPDATE processing_runs SET status = 'PREPUBLISHED' WHERE status = 'VALIDATED'"
+        )

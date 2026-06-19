@@ -490,12 +490,10 @@ name = "data-integration-process"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "alembic" },
     { name = "defusedxml" },
     { name = "portalocker" },
     { name = "prefect" },
     { name = "pydantic" },
-    { name = "pydantic-settings" },
     { name = "sqlalchemy" },
 ]
 
@@ -507,12 +505,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "alembic" },
     { name = "defusedxml" },
     { name = "portalocker" },
     { name = "prefect" },
     { name = "pydantic" },
-    { name = "pydantic-settings" },
     { name = "pyfakefs", marker = "extra == 'dev'" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "sqlalchemy" },

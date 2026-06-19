@@ -3,6 +3,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from data_integration.logging_setup import log_fields
+
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class NotificationMessage:
@@ -17,13 +21,12 @@ class Notifier:
 
 
 class LoggingNotifier(Notifier):
-    def __init__(self) -> None:
-        self._logger = logging.getLogger(__name__)
-
     def send(self, message: NotificationMessage) -> None:
-        self._logger.warning(
-            "Dry-run notification. subject=%s recipients=%s body=%s",
-            message.subject,
-            ",".join(message.recipients),
-            message.body,
+        _LOGGER.warning(
+            "Notification (dry-run) | %s",
+            log_fields(
+                subject=message.subject,
+                recipients=",".join(message.recipients) or "-",
+                body=message.body,
+            ),
         )

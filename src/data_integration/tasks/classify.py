@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import logging
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from prefect import get_run_logger, task
+from prefect import task
 
 from data_integration.config.schema import IntegrationConfig
 from data_integration.files.safety import (
@@ -16,6 +15,8 @@ from data_integration.files.safety import (
     render_safe_target,
     staging_destination,
 )
+from data_integration.logging_setup import log_fields, task_logger
+from data_integration.prefect_ui import TASK_CLASSIFY, TASK_CLASSIFY_DESC
 from data_integration.rules.engine import RuleEvaluationError, classify_xml_file
 from data_integration.storage.db import build_engine, build_session_factory, init_db
 from data_integration.storage.models import FileStatus, ProcessingRunStatus, RuleMatchStatus
@@ -24,12 +25,14 @@ from data_integration.storage.repository import (
     TargetCollisionError,
 )
 
+_LOGGER = task_logger(__name__)
+
 
 class ClassificationRunError(RuntimeError):
     pass
 
 
-@task(name="Step 2: Classify Files", retries=1, retry_delay_seconds=10)
+@task(name=TASK_CLASSIFY, description=TASK_CLASSIFY_DESC, retries=1, retry_delay_seconds=10)
 def classify_files(config: IntegrationConfig, run_id: str) -> str:
     engine = build_engine(config.directories.sqlite_path)
     init_db(engine)
@@ -42,15 +45,26 @@ def classify_run_impl(
     repository: IntegrationRepository,
     run_id: str,
 ) -> str:
-    logger = _logger()
-    files = repository.get_run_files(run_id, [FileStatus.ARCHIVED_B])
+    logger = _LOGGER
+    files = repository.get_run_files(run_id, [FileStatus.ARCHIVED])
     if not files:
         repository.mark_run(run_id, ProcessingRunStatus.FAILED, "No archived files available for classification.")
+        logger.error("Classification aborted: no archived files | %s", log_fields(run_id=run_id))
         raise ClassificationRunError(f"source run {run_id} has no archived files")
+
+    logger.info(
+        "Starting classification | %s",
+        log_fields(run_id=run_id, file_count=len(files), rule_count=len(config.rules)),
+    )
 
     failures: list[str] = []
     for record in files:
         archive_path = Path(record.archive_path)
+        source_name = Path(record.source_path).name
+        logger.debug(
+            "Classifying file | %s",
+            log_fields(run_id=run_id, file_id=record.id, source=source_name, archive=archive_path),
+        )
         try:
             result = classify_xml_file(archive_path, config)
         except RuleEvaluationError as exc:
@@ -61,6 +75,10 @@ def classify_run_impl(
                 details={"error": str(exc)},
             )
             failures.append(_quarantine_file(repository, config, record.id, archive_path, run_id, "rule_error", str(exc)))
+            logger.warning(
+                "Rule evaluation error; file quarantined | %s",
+                log_fields(run_id=run_id, source=source_name, error=str(exc)),
+            )
             continue
 
         for evaluation in result.all_evaluations:
@@ -74,6 +92,15 @@ def classify_run_impl(
                     "errors": evaluation.errors,
                 },
             )
+            logger.debug(
+                "Rule evaluation | %s",
+                log_fields(
+                    source=source_name,
+                    rule_id=evaluation.rule_id,
+                    matched=evaluation.matched,
+                    errors=len(evaluation.errors),
+                ),
+            )
 
         if len(result.matched_rules) != 1:
             reason = "multiple_match" if result.matched_rules else "no_match"
@@ -85,6 +112,15 @@ def classify_run_impl(
                 details={"matched_rule_ids": [match.rule_id for match in result.matched_rules]},
             )
             failures.append(_quarantine_file(repository, config, record.id, archive_path, run_id, reason, message))
+            logger.warning(
+                "Classification mismatch; file quarantined | %s",
+                log_fields(
+                    run_id=run_id,
+                    source=source_name,
+                    reason=reason,
+                    matched_rules=len(result.matched_rules),
+                ),
+            )
             continue
 
         matched_rule = result.matched_rules[0]
@@ -112,28 +148,46 @@ def classify_run_impl(
                 prepublish_path=prepublish_path,
                 publish_mode=rule_config.publish_mode,
             )
+            logger.debug(
+                "File classified | %s",
+                log_fields(
+                    run_id=run_id,
+                    source=source_name,
+                    rule_id=matched_rule.rule_id,
+                    publish_mode=rule_config.publish_mode,
+                    logical_target=logical_target_path,
+                    prepublish=prepublish_path,
+                ),
+            )
         except (FileSafetyError, TargetCollisionError) as exc:
             if staging_path is not None and staging_path.exists():
                 move_to_quarantine(staging_path, config.directories.quarantine_dir, run_id, "classification_failed")
             failures.append(_quarantine_file(repository, config, record.id, archive_path, run_id, "classification_failed", str(exc)))
+            logger.warning(
+                "Classification failed; file quarantined | %s",
+                log_fields(run_id=run_id, source=source_name, error=str(exc)),
+            )
 
     staged_count = len(repository.get_run_files(run_id, [FileStatus.CLASSIFIED_STAGING]))
     if staged_count:
         repository.mark_run(run_id, ProcessingRunStatus.CLASSIFIED)
         if failures:
             logger.warning(
-                "Classified %s of %s file(s) for source run %s; %s failed.",
-                staged_count,
-                len(files),
-                run_id,
-                len(failures),
+                "Classification complete with failures | %s",
+                log_fields(run_id=run_id, staged=staged_count, total=len(files), failed=len(failures)),
             )
         else:
-            logger.info("Classified %s file(s) for source run %s.", len(files), run_id)
+            logger.info(
+                "Classification complete | %s",
+                log_fields(run_id=run_id, staged=staged_count),
+            )
     else:
         message = "; ".join(failures)
         repository.mark_run(run_id, ProcessingRunStatus.COMPLETED_WITH_ERRORS, message)
-        logger.error("Classification failed for all files in source run %s: %s", run_id, message)
+        logger.error(
+            "Classification failed for all files | %s",
+            log_fields(run_id=run_id, failures=message),
+        )
     return run_id
 
 
@@ -193,13 +247,6 @@ def _quarantine_file(
     quarantine_path = move_to_quarantine(path, config.directories.quarantine_dir, run_id, reason)
     repository.mark_file_quarantined(file_id, quarantine_path, message)
     return f"{path.name}: {message}"
-
-
-def _logger() -> logging.Logger:
-    try:
-        return get_run_logger()
-    except Exception:
-        return logging.getLogger(__name__)
 
 
 def _json_safe(value: Any) -> Any:

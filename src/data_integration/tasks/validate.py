@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
-from prefect import get_run_logger, task
+from prefect import task
 
 from data_integration.config.schema import IntegrationConfig
 from data_integration.files.safety import move_to_quarantine, promote_file, sha256_file
+from data_integration.logging_setup import log_fields, task_logger
+from data_integration.prefect_ui import TASK_VALIDATE_PREPUBLISH, TASK_VALIDATE_PREPUBLISH_DESC
 from data_integration.storage.db import build_engine, build_session_factory, init_db
 from data_integration.storage.models import FileRecord, FileStatus, ProcessingRunStatus, ValidationStatus
 from data_integration.storage.repository import IntegrationRepository
 
+_LOGGER = task_logger(__name__)
 
-@task(name="Step 3: Validate and Prepublish Files", retries=0)
+
+@task(name=TASK_VALIDATE_PREPUBLISH, description=TASK_VALIDATE_PREPUBLISH_DESC, retries=0)
 def validate_and_prepublish_files(config: IntegrationConfig, run_id: str) -> str:
     engine = build_engine(config.directories.sqlite_path)
     init_db(engine)
@@ -25,13 +28,19 @@ def validate_and_prepublish_run_impl(
     repository: IntegrationRepository,
     run_id: str,
 ) -> str:
-    logger = _logger()
+    logger = _LOGGER
     staged_files = repository.get_run_files(run_id, [FileStatus.CLASSIFIED_STAGING])
     if not staged_files:
         run = repository.get_run(run_id)
         if run.status == ProcessingRunStatus.CLASSIFIED.value:
             repository.mark_run(run_id, ProcessingRunStatus.COMPLETED_WITH_ERRORS, "No staged files to prepublish.")
+        logger.info("No staged files to prepublish | %s", log_fields(run_id=run_id, run_status=run.status))
         return run_id
+
+    logger.info(
+        "Starting prepublish validation | %s",
+        log_fields(run_id=run_id, staged_count=len(staged_files)),
+    )
 
     failures: list[str] = []
     targets_seen: set[str] = set()
@@ -39,7 +48,8 @@ def validate_and_prepublish_run_impl(
     superseded_count = 0
 
     for record in staged_files:
-        superseding_record = _get_superseding_replace_record(repository, record)
+        source_name = Path(record.source_path).name
+        superseding_record = repository.get_superseding_replace_record(record)
         if superseding_record is not None:
             quarantine_path = _quarantine_superseded_staging_file(config, record)
             repository.mark_file_superseded(
@@ -52,12 +62,25 @@ def validate_and_prepublish_run_impl(
                 ),
             )
             superseded_count += 1
+            logger.debug(
+                "File superseded before prepublish | %s",
+                log_fields(
+                    run_id=run_id,
+                    source=source_name,
+                    superseded_by=superseding_record.id,
+                    revision=superseding_record.config_revision,
+                ),
+            )
             continue
 
         file_errors = _validate_staged_file(record, targets_seen)
         if file_errors:
             failures.extend(file_errors)
             _quarantine_staging_file(config, repository, record, "; ".join(file_errors))
+            logger.warning(
+                "Staging validation failed; file quarantined | %s",
+                log_fields(run_id=run_id, source=source_name, errors="; ".join(file_errors)),
+            )
             continue
 
         staging_path = Path(record.staging_path or "")
@@ -71,9 +94,18 @@ def validate_and_prepublish_run_impl(
             )
             repository.mark_file_prepublished(record.id, prepublish_path)
             prepublished_count += 1
+            logger.debug(
+                "File prepublished | %s",
+                log_fields(
+                    run_id=run_id,
+                    source=source_name,
+                    prepublish=prepublish_path,
+                    publish_mode=record.publish_mode,
+                ),
+            )
         except Exception as exc:
             message = str(exc)
-            failures.append(f"{Path(record.source_path).name}: {message}")
+            failures.append(f"{source_name}: {message}")
             if prepublish_path.exists():
                 quarantine_path = move_to_quarantine(
                     prepublish_path,
@@ -86,6 +118,10 @@ def validate_and_prepublish_run_impl(
                 _quarantine_staging_file(config, repository, record, f"prepublish failed: {message}")
             else:
                 repository.mark_file_failed(record.id, f"prepublish failed: {message}")
+            logger.warning(
+                "Prepublish failed | %s",
+                log_fields(run_id=run_id, source=source_name, error=message),
+            )
 
     if failures:
         message = "; ".join(failures)
@@ -101,25 +137,30 @@ def validate_and_prepublish_run_impl(
             },
         )
         logger.warning(
-            "Prepublished %s of %s staged file(s) for source run %s; %s failed.",
-            prepublished_count,
-            len(staged_files),
-            run_id,
-            len(failures),
+            "Prepublish complete with failures | %s",
+            log_fields(
+                run_id=run_id,
+                prepublished=prepublished_count,
+                staged=len(staged_files),
+                failed=len(failures),
+                superseded=superseded_count,
+            ),
         )
     elif prepublished_count == 0 and superseded_count > 0:
         message = "All staged files were superseded by newer revisions."
         repository.mark_run(run_id, ProcessingRunStatus.COMPLETED_WITH_ERRORS, message)
-        logger.info("Skipped prepublish for source run %s because newer revisions already won.", run_id)
+        logger.info(
+            "Prepublish skipped; all files superseded | %s",
+            log_fields(run_id=run_id, superseded=superseded_count),
+        )
     elif repository.summarize_run(run_id)["failed"] > 0:
         repository.mark_run(run_id, ProcessingRunStatus.COMPLETED_WITH_ERRORS)
         logger.warning(
-            "Prepublished %s staged file(s) for source run %s with prior file failures.",
-            prepublished_count,
-            run_id,
+            "Prepublish complete with prior file failures | %s",
+            log_fields(run_id=run_id, prepublished=prepublished_count),
         )
     else:
-        repository.mark_run(run_id, ProcessingRunStatus.VALIDATED)
+        repository.mark_run(run_id, ProcessingRunStatus.PREPUBLISHED)
         repository.add_validation_event(
             run_id=run_id,
             status=ValidationStatus.PASS,
@@ -130,7 +171,14 @@ def validate_and_prepublish_run_impl(
                 "superseded_count": superseded_count,
             },
         )
-        logger.info("Prepublished %s file(s) for source run %s.", prepublished_count, run_id)
+        logger.info(
+            "Prepublish validation passed | %s",
+            log_fields(
+                run_id=run_id,
+                prepublished=prepublished_count,
+                superseded=superseded_count,
+            ),
+        )
     return run_id
 
 
@@ -196,22 +244,6 @@ def _quarantine_superseded_staging_file(config: IntegrationConfig, record: FileR
     return move_to_quarantine(staging_path, config.directories.quarantine_dir, record.run_id, "superseded")
 
 
-def _get_superseding_replace_record(
-    repository: IntegrationRepository,
-    record: FileRecord,
-) -> FileRecord | None:
-    if record.publish_mode != "replace" or not record.logical_target_path:
-        return None
-    latest = repository.get_latest_replace_file(
-        source_path=Path(record.source_path),
-        sha256=record.sha256,
-        logical_target_path=Path(record.logical_target_path),
-    )
-    if latest is None or latest.id == record.id:
-        return None
-    return latest
-
-
 def validate_and_publish_run_impl(
     config: IntegrationConfig,
     repository: IntegrationRepository,
@@ -222,13 +254,3 @@ def validate_and_publish_run_impl(
     validate_and_prepublish_run_impl(config, repository, run_id)
     publish_prepublished_run_impl(config, repository, run_id=run_id)
     return run_id
-
-
-validate_and_publish_files = validate_and_prepublish_files
-
-
-def _logger() -> logging.Logger:
-    try:
-        return get_run_logger()
-    except Exception:
-        return logging.getLogger(__name__)

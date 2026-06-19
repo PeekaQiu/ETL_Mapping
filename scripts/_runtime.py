@@ -13,10 +13,9 @@ from data_integration.config.loader import (
 )
 from data_integration.flows.controller import (
     load_controller as _load_controller,
-    iter_enabled_sources as _iter_enabled_sources,
     resolve_project_path as _resolve_project_path,
-    validate_source_configs as _validate_source_configs,
 )
+from data_integration.logging_setup import configure_logging as _configure_logging
 
 
 def bootstrap() -> Path:
@@ -28,6 +27,7 @@ def bootstrap() -> Path:
         import os
 
         os.chdir(project_root)
+    logging.getLogger(__name__).debug("Bootstrapped project root | path=%s", project_root)
     return project_root
 
 
@@ -40,22 +40,12 @@ def find_project_root() -> Path:
 
 
 def configure_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s | %(levelname)-7s | %(name)s - %(message)s",
-        datefmt="%H:%M:%S",
-        force=True,
-    )
+    _configure_logging(verbose=verbose)
 
 
 def resolve_path(path: str | Path, *, project_root: Path | None = None) -> Path:
     root = project_root or find_project_root()
     return _resolve_project_path(path, root)
-
-
-class StopRequested(Exception):
-    pass
 
 
 class GracefulStop:
@@ -125,18 +115,6 @@ def add_loop_args(parser: argparse.ArgumentParser) -> None:
 
 def load_controller(controller_path: Path):
     return _load_controller(controller_path)
-
-
-def iter_enabled_sources(controller, *, project_root: Path):
-    return _iter_enabled_sources(controller, project_root_path=project_root)
-
-
-def validate_source_configs(sources):
-    return _validate_source_configs(sources)
-
-
-def default_controller_path(project_root: Path) -> Path:
-    return resolve_path(DEFAULT_BULK_CONTROLLER_CONFIG_PATH, project_root=project_root)
 
 
 def default_controller_variable() -> str:

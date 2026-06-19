@@ -20,14 +20,19 @@ def test_initialize_load_and_patch_prefect_variable(tmp_path: Path, monkeypatch)
     initialized = initialize_config_variable_from_file(config_path, variable_name="etl_config")
     loaded = validate_config_payload(store.values["etl_config"])
     updated = update_config_variable(
-        {"runtime": {"archive_retention_days": 60}},
+        {"runtime": {"archive_retention_days": 60, "config_revision": 2}},
         variable_name="etl_config",
     )
 
     assert initialized.runtime.archive_retention_days == 30
+    assert initialized.directories.prepublish_dir == tmp_path / "C_prepublish"
+    assert initialized.runtime.config_revision == 1
     assert loaded.rules[0].rule_id == "invoice"
+    assert loaded.rules[0].publish_mode == "replace"
     assert updated.runtime.archive_retention_days == 60
+    assert updated.runtime.config_revision == 2
     assert store.values["etl_config"]["runtime"]["archive_retention_days"] == 60
+    assert store.values["etl_config"]["runtime"]["config_revision"] == 2
 
 
 def test_initialize_bulk_sources_from_files_requires_explicit_overwrite(tmp_path: Path, monkeypatch) -> None:

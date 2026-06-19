@@ -10,13 +10,27 @@ from data_integration.config.loader import read_config_file, validate_config_pay
 from data_integration.config.schema import IntegrationConfig
 from data_integration.notifications.base import LoggingNotifier, NotificationMessage
 from data_integration.runtime.locks import integration_lock
+from data_integration.storage.db import build_engine, build_session_factory, init_db
+from data_integration.storage.repository import IntegrationRepository
 from data_integration.tasks.archive import archive_files
-from data_integration.tasks.classify import classify_files
+from data_integration.tasks.classify import ClassificationRunError, classify_files
 from data_integration.tasks.retention import cleanup_archive_retention
-from data_integration.tasks.validate import validate_and_publish_files
+from data_integration.tasks.validate import validate_and_prepublish_files
 
 
 def run_data_integration(
+    config_variable: str | None = None,
+    config_path: str | None = None,
+    source_name: str | None = None,
+) -> str | None:
+    return run_data_integration_impl(
+        config_variable=config_variable,
+        config_path=config_path,
+        source_name=source_name,
+    )
+
+
+def run_data_integration_impl(
     config_variable: str | None = None,
     config_path: str | None = None,
     source_name: str | None = None,
@@ -33,10 +47,18 @@ def run_data_integration(
                 logger.info("No files were archived; flow completed with no work.")
                 return None
             _source_task(classify_files, source_name, "Step 2: Classify Files")(config, run_id)
-            _source_task(validate_and_publish_files, source_name, "Step 3: Validate and Publish Files")(config, run_id)
+            _source_task(validate_and_prepublish_files, source_name, "Step 3: Validate and Prepublish Files")(
+                config,
+                run_id,
+            )
             _source_task(cleanup_archive_retention, source_name, "Step 4: Cleanup Archive Retention")(config)
+            _log_run_summary(config, run_id, logger)
             return run_id
+        except ClassificationRunError:
+            raise
         except Exception as exc:
+            if run_id is not None:
+                _log_run_summary(config, run_id, logger)
             notifier.send(
                 NotificationMessage(
                     subject="Data Integration Process failed",
@@ -45,6 +67,20 @@ def run_data_integration(
                 )
             )
             raise
+
+
+def _log_run_summary(config: IntegrationConfig, run_id: str, logger: logging.Logger) -> None:
+    engine = build_engine(config.directories.sqlite_path)
+    init_db(engine)
+    repository = IntegrationRepository(build_session_factory(engine))
+    run = repository.get_run(run_id)
+    summary = repository.summarize_run(run_id)
+    logger.info(
+        "Run %s finished with status %s: %s",
+        run_id,
+        run.status,
+        json.dumps(summary, ensure_ascii=False),
+    )
 
 
 def _read_integration_config(

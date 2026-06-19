@@ -91,34 +91,49 @@ def classify_run_impl(
         rule_config = next(rule for rule in config.rules if rule.rule_id == matched_rule.rule_id)
         staging_path: Path | None = None
         try:
-            target_path = render_safe_target(
-                config.directories.output_root,
+            logical_target_path, final_target_path, prepublish_path = _resolve_target_paths(
+                config,
                 rule_config.target_path_template,
-                _target_variables(run_id, matched_rule.rule_id, archive_path, matched_rule.extracted_values),
+                rule_config.publish_mode,
+                run_id,
+                matched_rule.rule_id,
+                archive_path,
+                matched_rule.extracted_values,
             )
-            if target_path.exists():
-                raise FileSafetyError(f"target already exists: {target_path}")
+            if rule_config.publish_mode == "supplement" and final_target_path.exists():
+                raise FileSafetyError(f"target already exists: {final_target_path}")
             staging_path = staging_destination(config.directories.staging_dir, run_id, matched_rule.rule_id, archive_path)
             copy_verify(archive_path, staging_path, record.sha256)
             repository.mark_file_classified(
                 file_id=record.id,
                 staging_path=staging_path,
-                target_path=target_path,
+                logical_target_path=logical_target_path,
+                final_target_path=final_target_path,
+                prepublish_path=prepublish_path,
+                publish_mode=rule_config.publish_mode,
             )
         except (FileSafetyError, TargetCollisionError) as exc:
             if staging_path is not None and staging_path.exists():
                 move_to_quarantine(staging_path, config.directories.quarantine_dir, run_id, "classification_failed")
             failures.append(_quarantine_file(repository, config, record.id, archive_path, run_id, "classification_failed", str(exc)))
 
-    if failures:
-        _quarantine_staged_files(config, repository, run_id, "run_classification_failed")
+    staged_count = len(repository.get_run_files(run_id, [FileStatus.CLASSIFIED_STAGING]))
+    if staged_count:
+        repository.mark_run(run_id, ProcessingRunStatus.CLASSIFIED)
+        if failures:
+            logger.warning(
+                "Classified %s of %s file(s) for source run %s; %s failed.",
+                staged_count,
+                len(files),
+                run_id,
+                len(failures),
+            )
+        else:
+            logger.info("Classified %s file(s) for source run %s.", len(files), run_id)
+    else:
         message = "; ".join(failures)
-        repository.mark_run(run_id, ProcessingRunStatus.FAILED, message)
-        logger.error("Classification failed for source run %s: %s", run_id, message)
-        raise ClassificationRunError(message)
-
-    repository.mark_run(run_id, ProcessingRunStatus.CLASSIFIED)
-    logger.info("Classified %s file(s) for source run %s.", len(files), run_id)
+        repository.mark_run(run_id, ProcessingRunStatus.COMPLETED_WITH_ERRORS, message)
+        logger.error("Classification failed for all files in source run %s: %s", run_id, message)
     return run_id
 
 
@@ -136,6 +151,36 @@ def _target_variables(run_id: str, rule_id: str, source_path: Path, extracted_va
     }
 
 
+def _resolve_target_paths(
+    config: IntegrationConfig,
+    target_path_template: str,
+    publish_mode: str,
+    run_id: str,
+    rule_id: str,
+    source_path: Path,
+    extracted_values: dict,
+) -> tuple[Path, Path, Path]:
+    logical_target_path = render_safe_target(
+        config.directories.output_root,
+        target_path_template,
+        _target_variables(run_id, rule_id, source_path, extracted_values),
+    )
+    if publish_mode == "supplement":
+        final_target_path = _versioned_target_path(logical_target_path, config.runtime.config_revision)
+    else:
+        final_target_path = logical_target_path
+    output_root = config.directories.output_root.resolve()
+    relative_target_path = final_target_path.relative_to(output_root)
+    prepublish_path = config.directories.prepublish_dir.resolve() / relative_target_path
+    return logical_target_path, final_target_path, prepublish_path
+
+
+def _versioned_target_path(path: Path, config_revision: int) -> Path:
+    suffix = "".join(path.suffixes)
+    stem = path.name[: -len(suffix)] if suffix else path.name
+    return path.with_name(f"{stem}__v{config_revision}{suffix}")
+
+
 def _quarantine_file(
     repository: IntegrationRepository,
     config: IntegrationConfig,
@@ -148,24 +193,6 @@ def _quarantine_file(
     quarantine_path = move_to_quarantine(path, config.directories.quarantine_dir, run_id, reason)
     repository.mark_file_quarantined(file_id, quarantine_path, message)
     return f"{path.name}: {message}"
-
-
-def _quarantine_staged_files(
-    config: IntegrationConfig,
-    repository: IntegrationRepository,
-    run_id: str,
-    reason: str,
-) -> None:
-    staged_files = repository.get_run_files(run_id, [FileStatus.CLASSIFIED_STAGING])
-    for record in staged_files:
-        if record.staging_path:
-            quarantine_path = move_to_quarantine(
-                Path(record.staging_path),
-                config.directories.quarantine_dir,
-                run_id,
-                reason,
-            )
-            repository.mark_file_quarantined(record.id, quarantine_path, f"source run failed: {reason}")
 
 
 def _logger() -> logging.Logger:

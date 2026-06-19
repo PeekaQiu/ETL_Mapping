@@ -29,6 +29,27 @@ class TargetCollisionError(RuntimeError):
     pass
 
 
+_RETRYABLE_FILE_STATUSES = frozenset(
+    {FileStatus.QUARANTINED.value, FileStatus.FAILED.value}
+)
+_SUPERSEDED_FILE_STATUSES = frozenset({FileStatus.SUPERSEDED.value})
+_ACTIVE_REPLACE_COLLISION_STATUSES = frozenset(
+    {
+        FileStatus.CLASSIFIED_STAGING.value,
+        FileStatus.PREPUBLISHED.value,
+        FileStatus.VALIDATED.value,
+    }
+)
+_ACTIVE_FINAL_TARGET_STATUSES = frozenset(
+    {
+        FileStatus.CLASSIFIED_STAGING.value,
+        FileStatus.PREPUBLISHED.value,
+        FileStatus.VALIDATED.value,
+        FileStatus.PUBLISHED.value,
+    }
+)
+
+
 class IntegrationRepository:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -51,14 +72,17 @@ class IntegrationRepository:
             session.expunge(run)
             return run
 
-    def has_seen_source_hash(self, source_path: Path, sha256: str) -> bool:
+    def has_seen_source_hash(self, source_path: Path, sha256: str, *, config_revision: int) -> bool:
         with self._session_factory() as session:
             stmt = select(FileRecord.status).where(
                 FileRecord.source_path == str(source_path),
                 FileRecord.sha256 == sha256,
+                FileRecord.config_revision == config_revision,
             )
             row = session.execute(stmt).first()
             if row is None:
+                return False
+            if row[0] in _RETRYABLE_FILE_STATUSES:
                 return False
             return row[0] != FileStatus.DISCOVERED.value
 
@@ -70,15 +94,32 @@ class IntegrationRepository:
         archive_path: Path,
         sha256: str,
         size_bytes: int,
+        config_revision: int,
     ) -> FileRecord:
         with self._session_factory.begin() as session:
             existing = session.scalar(
                 select(FileRecord).where(
                     FileRecord.source_path == str(source_path),
                     FileRecord.sha256 == sha256,
+                    FileRecord.config_revision == config_revision,
                 )
             )
             if existing is not None:
+                if existing.status in _RETRYABLE_FILE_STATUSES:
+                    existing.run_id = run_id
+                    existing.archive_path = str(archive_path)
+                    existing.size_bytes = size_bytes
+                    existing.staging_path = None
+                    existing.target_path = None
+                    existing.logical_target_path = None
+                    existing.final_target_path = None
+                    existing.prepublish_path = None
+                    existing.quarantine_path = None
+                    existing.publish_mode = None
+                    existing.superseded_by_file_id = None
+                    existing.status = FileStatus.DISCOVERED.value
+                    existing.error_message = None
+                    return existing
                 if existing.status != FileStatus.DISCOVERED.value:
                     raise DuplicateFileError(f"file already processed: {source_path}")
                 existing.run_id = run_id
@@ -93,6 +134,7 @@ class IntegrationRepository:
                 archive_path=str(archive_path),
                 sha256=sha256,
                 size_bytes=size_bytes,
+                config_revision=config_revision,
                 status=FileStatus.DISCOVERED.value,
             )
             try:
@@ -150,15 +192,38 @@ class IntegrationRepository:
         *,
         file_id: int,
         staging_path: Path,
-        target_path: Path,
+        logical_target_path: Path,
+        final_target_path: Path,
+        prepublish_path: Path,
+        publish_mode: str,
     ) -> None:
         with self._session_factory.begin() as session:
-            if self._target_exists(session, target_path):
-                raise TargetCollisionError(f"target already exists in state store: {target_path}")
             record = self._get_file(session, file_id)
+            if self._target_exists(
+                session,
+                logical_target_path=logical_target_path,
+                final_target_path=final_target_path,
+                publish_mode=publish_mode,
+                source_path=Path(record.source_path),
+                sha256=record.sha256,
+                config_revision=record.config_revision,
+                file_id=file_id,
+            ):
+                raise TargetCollisionError(f"target already exists in state store: {final_target_path}")
             record.staging_path = str(staging_path)
-            record.target_path = str(target_path)
+            record.target_path = str(final_target_path)
+            record.logical_target_path = str(logical_target_path)
+            record.final_target_path = str(final_target_path)
+            record.prepublish_path = str(prepublish_path)
+            record.publish_mode = publish_mode
             record.status = FileStatus.CLASSIFIED_STAGING.value
+            record.error_message = None
+
+    def mark_file_prepublished(self, file_id: int, prepublish_path: Path) -> None:
+        with self._session_factory.begin() as session:
+            record = self._get_file(session, file_id)
+            record.prepublish_path = str(prepublish_path)
+            record.status = FileStatus.PREPUBLISHED.value
             record.error_message = None
 
     def mark_file_validated(self, file_id: int) -> None:
@@ -168,7 +233,24 @@ class IntegrationRepository:
         with self._session_factory.begin() as session:
             record = self._get_file(session, file_id)
             record.target_path = str(target_path)
+            record.final_target_path = str(target_path)
             record.status = FileStatus.PUBLISHED.value
+
+    def mark_file_superseded(
+        self,
+        file_id: int,
+        *,
+        superseded_by_file_id: int,
+        quarantine_path: Path | None = None,
+        message: str | None = None,
+    ) -> None:
+        with self._session_factory.begin() as session:
+            record = self._get_file(session, file_id)
+            record.superseded_by_file_id = superseded_by_file_id
+            if quarantine_path is not None:
+                record.quarantine_path = str(quarantine_path)
+            record.status = FileStatus.SUPERSEDED.value
+            record.error_message = message
 
     def mark_file_failed(self, file_id: int, message: str) -> None:
         with self._session_factory.begin() as session:
@@ -201,12 +283,58 @@ class IntegrationRepository:
                 )
             )
 
-    def summarize_run(self, run_id: str) -> dict[str, int]:
+    def get_latest_replace_file(
+        self,
+        *,
+        source_path: Path,
+        sha256: str,
+        logical_target_path: Path,
+    ) -> FileRecord | None:
+        with self._session_factory() as session:
+            stmt = (
+                select(FileRecord)
+                .where(
+                    FileRecord.source_path == str(source_path),
+                    FileRecord.sha256 == sha256,
+                    FileRecord.logical_target_path == str(logical_target_path),
+                    FileRecord.publish_mode == "replace",
+                    ~FileRecord.status.in_(_RETRYABLE_FILE_STATUSES | _SUPERSEDED_FILE_STATUSES),
+                )
+                .order_by(FileRecord.config_revision.desc(), FileRecord.id.desc())
+            )
+            record = session.scalar(stmt)
+            if record is None:
+                return None
+            session.expunge(record)
+            return record
+
+    def summarize_run(self, run_id: str) -> dict:
         files = self.get_run_files(run_id)
-        summary: dict[str, int] = {}
+        by_status: dict[str, int] = {}
+        success = 0
+        failed = 0
+        failed_files: list[dict[str, str | None]] = []
         for record in files:
-            summary[record.status] = summary.get(record.status, 0) + 1
-        return summary
+            by_status[record.status] = by_status.get(record.status, 0) + 1
+            if record.status == FileStatus.PUBLISHED.value:
+                success += 1
+            elif record.status in _RETRYABLE_FILE_STATUSES:
+                failed += 1
+                failed_files.append(
+                    {
+                        "name": Path(record.source_path).name,
+                        "source_path": record.source_path,
+                        "quarantine_path": record.quarantine_path,
+                        "reason": record.error_message,
+                    }
+                )
+        return {
+            "total": len(files),
+            "success": success,
+            "failed": failed,
+            "failed_files": failed_files,
+            "by_status": by_status,
+        }
 
     def delete_old_detail_records(self, cutoff: datetime) -> int:
         with self._session_factory.begin() as session:
@@ -239,15 +367,34 @@ class IntegrationRepository:
         return record
 
     @staticmethod
-    def _target_exists(session: Session, target_path: Path) -> bool:
+    def _target_exists(
+        session: Session,
+        *,
+        logical_target_path: Path,
+        final_target_path: Path,
+        publish_mode: str,
+        source_path: Path,
+        sha256: str,
+        config_revision: int,
+        file_id: int,
+    ) -> bool:
+        if publish_mode == "replace":
+            stmt = select(FileRecord).where(
+                FileRecord.logical_target_path == str(logical_target_path),
+                FileRecord.publish_mode == "replace",
+                FileRecord.status.in_(_ACTIVE_REPLACE_COLLISION_STATUSES),
+                FileRecord.id != file_id,
+            )
+            for existing in session.scalars(stmt):
+                if existing.source_path == str(source_path) and existing.sha256 == sha256:
+                    if existing.config_revision <= config_revision:
+                        continue
+                return True
+            return False
+
         stmt = select(FileRecord.id).where(
-            FileRecord.target_path == str(target_path),
-            FileRecord.status.in_(
-                [
-                    FileStatus.CLASSIFIED_STAGING.value,
-                    FileStatus.VALIDATED.value,
-                    FileStatus.PUBLISHED.value,
-                ]
-            ),
+            FileRecord.final_target_path == str(final_target_path),
+            FileRecord.status.in_(_ACTIVE_FINAL_TARGET_STATUSES),
+            FileRecord.id != file_id,
         )
         return session.execute(stmt).first() is not None

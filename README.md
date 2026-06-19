@@ -2,35 +2,35 @@
 
 基于 Prefect 3 的 XML 文件归档、分类、验证和发布流程。
 
+## 脚本启动
 
-## 运行
+三个脚本彼此独立，可按需分别运行。执行前会自动切换到项目根目录，并直接读取 `config/` 下的本地配置文件。
 
-如果需要 `source_1`、`source_2`、`source_3` 全部执行完之后再等待一段时间，使用 bulk controller：
+```bash
+# 终端 1：Prefect 服务
+uv run prefect server start
 
-```powershell
-.venv/bin/python -c "from data_integration.flows.bulk_config_admin import initialize_bulk_sources_variables; initialize_bulk_sources_variables()
+# 终端 2
+export PREFECT_API_URL=http://127.0.0.1:4200/api
+
+# 1. 配置刷新
+uv run python -m scripts.init_config --prepare-dirs --overwrite
+
+# 2. 集成循环
+uv run python -m scripts.run_integration_loop --once
+
+# 3. 发布循环
+uv run python -m scripts.run_publish_loop --once
 ```
 
-这会初始化 4 个 Prefect Variables；默认不覆盖已存在变量，避免抹掉 Prefect UI 中的修改。如需用 `config/` 下的文件重置这些变量，再显式传入 `overwrite=True`。
+Prefect UI 中可见的顶层 Flow：
 
-- `bulk_source_1_config`
-- `bulk_source_2_config`
-- `bulk_source_3_config`
-- `bulk_sources_controller`
+| Flow | 脚本 | 说明 |
+|------|------|------|
+| `config-refresh` | `scripts.init_config` | 配置校验 / 刷新 |
+| `integration-loop` | `scripts.run_integration_loop` | 一轮集成；每个 source 是一个 task |
+| `publish-loop` | `scripts.run_publish_loop` | 一轮发布；每个 source 是一个 task |
 
-启动总控循环：
-
-```powershell
-.venv/bin/python -c "from data_integration.flows.bulk import run_bulk_sources_loop; run_bulk_sources_loop()"
-```
-
-`run_bulk_sources_loop()` 是轻量外部触发器：每轮触发一次 `bulk-sources-controller` Prefect Flow Run，等待 `bulk_sources_controller.loop.delay_seconds` 后再触发下一轮。Prefect UI 中不会保留一个长期 sleep 的 controller Flow Run。
-
-总控逻辑是：
-
-1. 读取 `bulk_sources_controller`。
-2. 按顺序读取并执行 `bulk_source_1_config`、`bulk_source_2_config`、`bulk_source_3_config`。
-3. 全部执行完成后等待 `bulk_sources_controller.loop.delay_seconds`。
-4. 进入下一轮。
-
-如需测试单轮，可把 `bulk_sources_controller.loop.cycles` 改成 `1`。
+- `--dry-run`：只校验配置，不写入 Prefect Variables
+- `--prepare-dirs`：创建配置里声明的运行目录
+- `--overwrite`：覆盖已有 Prefect Variables

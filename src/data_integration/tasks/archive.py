@@ -57,6 +57,7 @@ def archive_run_impl(config: IntegrationConfig, repository: IntegrationRepositor
                     archive_path=destination,
                     sha256=candidate.sha256,
                     size_bytes=candidate.size_bytes,
+                    config_revision=config.runtime.config_revision,
                 )
                 copy_verify(candidate.source_path, destination, candidate.sha256)
                 repository.mark_file_archived(record.id, destination)
@@ -91,7 +92,11 @@ def discover_archive_candidates(
             if not is_file_stable(source_path, config.runtime.file_stability_seconds):
                 continue
             file_hash = sha256_file(source_path)
-            if repository.has_seen_source_hash(source_path, file_hash):
+            if repository.has_seen_source_hash(
+                source_path,
+                file_hash,
+                config_revision=config.runtime.config_revision,
+            ):
                 continue
             candidates.append(
                 ArchiveCandidate(

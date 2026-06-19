@@ -6,6 +6,7 @@
     "archive_dir": "runtime/bulk_xml_test/flow_2/archive",
     "staging_dir": "runtime/bulk_xml_test/flow_2/staging",
     "output_root": "runtime/bulk_xml_test/flow_2/output",
+    "prepublish_dir": "runtime/bulk_xml_test/flow_2/prepublish",
     "quarantine_dir": "runtime/bulk_xml_test/flow_2/quarantine",
     "sqlite_path": "runtime/bulk_xml_test/flow_2/integration_run.sqlite3",
     "lock_file": "runtime/bulk_xml_test/flow_2/integration.lock"
@@ -13,13 +14,15 @@
   "runtime": {
     "file_stability_seconds": 0,
     "archive_retention_days": 10,
-    "no_overlap": true
+    "no_overlap": true,
+    "config_revision": 2
   },
   "rules": [
     {
       "rule_id": "source_2_invoice",
       "description": "Source 2 normal invoice documents from TLO2 with USD currency.",
       "target_path_template": "source_2/usd_invoices/{yyyy}/{mm}/{invoice_number}.xml",
+      "publish_mode": "supplement",
       "conditions": {
         "all": [
           {
@@ -63,6 +66,7 @@
       "rule_id": "source_2_credit_note",
       "description": "Source 2 credit note documents from TLO2 with USD currency.",
       "target_path_template": "source_2/usd_credit_notes/{yyyy}/{mm}/{invoice_number}.xml",
+      "publish_mode": "supplement",
       "conditions": {
         "all": [
           {

@@ -7,7 +7,8 @@ from prefect import flow, get_run_logger
 
 from data_integration.config.loader import DEFAULT_BULK_CONFIG_VARIABLE, load_bulk_config
 from data_integration.config.schema import BulkIntegrationConfig, FlowConfigRef
-from data_integration.flows.main import run_data_integration
+from data_integration.flows.main import run_data_integration_impl
+from data_integration.tasks.source_run import integrate_source
 
 
 @flow(name="bulk-sources-controller")
@@ -69,13 +70,14 @@ def run_bulk_sources_once_impl(controller: BulkIntegrationConfig) -> dict[str, s
 
 
 def _run_single_source(flow_config: FlowConfigRef) -> str | None:
+    source_task = integrate_source.with_options(name=f"{flow_config.name} - Integrate Source")
     if flow_config.config_variable:
-        return run_data_integration(
+        return source_task(
             config_variable=flow_config.config_variable,
             config_path=None,
             source_name=flow_config.name,
         )
-    return run_data_integration(config_path=flow_config.config_path, source_name=flow_config.name)
+    return source_task(config_path=flow_config.config_path, source_name=flow_config.name)
 
 
 def _logger() -> logging.Logger:

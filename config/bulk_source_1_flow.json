@@ -6,6 +6,7 @@
     "archive_dir": "runtime/bulk_xml_test/flow_1/archive",
     "staging_dir": "runtime/bulk_xml_test/flow_1/staging",
     "output_root": "runtime/bulk_xml_test/flow_1/output",
+    "prepublish_dir": "runtime/bulk_xml_test/flow_1/prepublish",
     "quarantine_dir": "runtime/bulk_xml_test/flow_1/quarantine",
     "sqlite_path": "runtime/bulk_xml_test/flow_1/integration_run.sqlite3",
     "lock_file": "runtime/bulk_xml_test/flow_1/integration.lock"
@@ -13,13 +14,15 @@
   "runtime": {
     "file_stability_seconds": 0,
     "archive_retention_days": 10,
-    "no_overlap": true
+    "no_overlap": true,
+    "config_revision": 3
   },
   "rules": [
     {
       "rule_id": "source_1_invoice",
       "description": "Source 1 normal invoice documents from TLO1.",
       "target_path_template": "source_1/invoices/{yyyy}/{mm}/{invoice_number}.xml",
+      "publish_mode": "replace",
       "conditions": {
         "all": [
           {
@@ -56,6 +59,7 @@
       "rule_id": "source_1_credit_note",
       "description": "Source 1 credit note documents from TLO1.",
       "target_path_template": "source_1/credit_notes/{yyyy}/{mm}/{invoice_number}.xml",
+      "publish_mode": "replace",
       "conditions": {
         "all": [
           {

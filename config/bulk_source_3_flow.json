@@ -6,6 +6,7 @@
     "archive_dir": "runtime/bulk_xml_test/flow_3/archive",
     "staging_dir": "runtime/bulk_xml_test/flow_3/staging",
     "output_root": "runtime/bulk_xml_test/flow_3/output",
+    "prepublish_dir": "runtime/bulk_xml_test/flow_3/prepublish",
     "quarantine_dir": "runtime/bulk_xml_test/flow_3/quarantine",
     "sqlite_path": "runtime/bulk_xml_test/flow_3/integration_run.sqlite3",
     "lock_file": "runtime/bulk_xml_test/flow_3/integration.lock"
@@ -13,13 +14,15 @@
   "runtime": {
     "file_stability_seconds": 0,
     "archive_retention_days": 10,
-    "no_overlap": true
+    "no_overlap": true,
+    "config_revision": 4
   },
   "rules": [
     {
       "rule_id": "source_3_invoice",
       "description": "Source 3 normal invoice documents from TLO3 in OCEANIA routing.",
       "target_path_template": "source_3/oceania_invoices/{yyyy}/{mm}/{invoice_number}.xml",
+      "publish_mode": "replace",
       "conditions": {
         "all": [
           {
@@ -63,6 +66,7 @@
       "rule_id": "source_3_credit_note",
       "description": "Source 3 credit note documents from TLO3 in OCEANIA routing.",
       "target_path_template": "source_3/oceania_credit_notes/{yyyy}/{mm}/{invoice_number}.xml",
+      "publish_mode": "replace",
       "conditions": {
         "all": [
           {

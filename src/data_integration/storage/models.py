@@ -18,6 +18,7 @@ class ProcessingRunStatus(StrEnum):
     CLASSIFIED = "CLASSIFIED"
     VALIDATED = "VALIDATED"
     PUBLISHED = "PUBLISHED"
+    COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
     FAILED = "FAILED"
     EMPTY = "EMPTY"
 
@@ -26,8 +27,10 @@ class FileStatus(StrEnum):
     DISCOVERED = "DISCOVERED"
     ARCHIVED_B = "ARCHIVED_B"
     CLASSIFIED_STAGING = "CLASSIFIED_STAGING"
+    PREPUBLISHED = "PREPUBLISHED"
     VALIDATED = "VALIDATED"
     PUBLISHED = "PUBLISHED"
+    SUPERSEDED = "SUPERSEDED"
     FAILED = "FAILED"
     QUARANTINED = "QUARANTINED"
 
@@ -65,7 +68,7 @@ class ProcessingRun(Base):
 class FileRecord(Base):
     __tablename__ = "files"
     __table_args__ = (
-        UniqueConstraint("source_path", "sha256", name="uq_file_source_hash"),
+        UniqueConstraint("source_path", "sha256", "config_revision", name="uq_file_source_hash_revision"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -74,9 +77,15 @@ class FileRecord(Base):
     archive_path: Mapped[str] = mapped_column(Text)
     staging_path: Mapped[str | None] = mapped_column(Text)
     target_path: Mapped[str | None] = mapped_column(Text)
+    logical_target_path: Mapped[str | None] = mapped_column(Text, index=True)
+    final_target_path: Mapped[str | None] = mapped_column(Text, index=True)
+    prepublish_path: Mapped[str | None] = mapped_column(Text)
     quarantine_path: Mapped[str | None] = mapped_column(Text)
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     size_bytes: Mapped[int] = mapped_column(Integer)
+    config_revision: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    publish_mode: Mapped[str | None] = mapped_column(String(16), index=True)
+    superseded_by_file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id"), index=True)
     status: Mapped[str] = mapped_column(String(32), default=FileStatus.DISCOVERED.value, index=True)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

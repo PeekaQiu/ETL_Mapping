@@ -98,11 +98,12 @@ def test_bulk_controller_rejects_ref_with_both_variable_and_path() -> None:
 def test_single_source_runs_inside_controller_flow_context(monkeypatch) -> None:
     calls: list[dict] = []
 
-    def fake_run_data_integration(**kwargs):
-        calls.append(kwargs)
-        return "run-source-1"
+    class FakeSourceTask:
+        def __call__(self, **kwargs):
+            calls.append(kwargs)
+            return "run-source-1"
 
-    monkeypatch.setattr(bulk, "run_data_integration", fake_run_data_integration)
+    monkeypatch.setattr(bulk.integrate_source, "with_options", lambda **kwargs: FakeSourceTask())
     flow_config = BulkIntegrationConfig.model_validate(
         {"flow_configs": [{"name": "source-1", "config_variable": "source_1_config"}]}
     ).flow_configs[0]

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 ValueType = Literal["str", "int", "float", "decimal", "date", "bool"]
+PublishMode = Literal["replace", "supplement"]
 Operator = Literal[
     "exists",
     "eq",
@@ -32,9 +33,16 @@ class DirectoryConfig(BaseModel):
     archive_dir: Path
     staging_dir: Path
     output_root: Path
+    prepublish_dir: Path | None = None
     quarantine_dir: Path
     sqlite_path: Path = Path("runtime/integration.sqlite3")
     lock_file: Path = Path("runtime/integration.lock")
+
+    @model_validator(mode="after")
+    def default_prepublish_dir(self) -> "DirectoryConfig":
+        if self.prepublish_dir is None:
+            self.prepublish_dir = self.output_root.parent / f"{self.output_root.name}_prepublish"
+        return self
 
 
 class RuntimeConfig(BaseModel):
@@ -43,6 +51,7 @@ class RuntimeConfig(BaseModel):
     detail_retention_days: int | None = Field(default=90, ge=0)
     cleanup_empty_dirs: bool = True
     no_overlap: bool = True
+    config_revision: int = Field(default=1, ge=1)
 
 
 class PredicateCondition(BaseModel):
@@ -87,6 +96,7 @@ class RuleConfig(BaseModel):
     rule_id: str
     target_path_template: str
     conditions: Condition
+    publish_mode: PublishMode = "replace"
     description: str | None = None
     enabled: bool = True
 

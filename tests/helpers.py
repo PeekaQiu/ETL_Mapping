@@ -30,7 +30,7 @@ class FakeVariableStore:
 
 
 def config_payload(tmp_path: Path, rules: list[dict[str, Any]] | None = None, **runtime_overrides: Any) -> dict[str, Any]:
-    runtime = {"file_stability_seconds": 0, "archive_retention_days": 30}
+    runtime = {"file_stability_seconds": 0, "archive_retention_days": 30, "config_revision": 1}
     runtime.update(runtime_overrides)
     return {
         "directories": {
@@ -38,6 +38,7 @@ def config_payload(tmp_path: Path, rules: list[dict[str, Any]] | None = None, **
             "archive_dir": str(tmp_path / "B"),
             "staging_dir": str(tmp_path / "C_staging"),
             "output_root": str(tmp_path / "C"),
+            "prepublish_dir": str(tmp_path / "C_prepublish"),
             "quarantine_dir": str(tmp_path / "quarantine"),
             "sqlite_path": str(tmp_path / "integration.sqlite3"),
             "lock_file": str(tmp_path / "integration.lock"),
@@ -57,10 +58,14 @@ def make_repository(config: IntegrationConfig) -> IntegrationRepository:
     return IntegrationRepository(build_session_factory(engine))
 
 
-def invoice_rule(target_path_template: str = "invoice/{source_name}") -> dict[str, Any]:
+def invoice_rule(
+    target_path_template: str = "invoice/{source_name}",
+    publish_mode: str = "replace",
+) -> dict[str, Any]:
     return {
         "rule_id": "invoice",
         "target_path_template": target_path_template,
+        "publish_mode": publish_mode,
         "conditions": {"all": [{"xpath": "/Document/Type", "op": "eq", "value": "INVOICE"}]},
     }
 

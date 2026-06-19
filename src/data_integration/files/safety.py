@@ -51,8 +51,14 @@ def copy_verify(source: Path, destination: Path, expected_sha256: str | None = N
         raise FileSafetyError(f"copy verification failed for {source} -> {destination}")
 
 
-def promote_file(staging_path: Path, target_path: Path, expected_sha256: str) -> None:
-    if target_path.exists():
+def promote_file(
+    staging_path: Path,
+    target_path: Path,
+    expected_sha256: str,
+    *,
+    allow_replace: bool = False,
+) -> None:
+    if target_path.exists() and not allow_replace:
         raise FileSafetyError(f"target already exists: {target_path}")
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if _same_drive(staging_path, target_path):
@@ -61,7 +67,9 @@ def promote_file(staging_path: Path, target_path: Path, expected_sha256: str) ->
             raise FileSafetyError(f"promoted file hash mismatch: {target_path}")
         return
 
-    copy_verify(staging_path, target_path, expected_sha256)
+    temporary_target = unique_destination(target_path.parent / f".{target_path.name}.tmp")
+    copy_verify(staging_path, temporary_target, expected_sha256)
+    os.replace(temporary_target, target_path)
     staging_path.unlink()
 
 

@@ -23,18 +23,11 @@
 修改 `rules`、`source_dirs` 或发布路由时，必须同步提升 `runtime.config_revision`。修改 `sqlite_path`、`output_root`、`prepublish_dir` 前，需先清空对应库中的 `PREPUBLISHED` / `CLASSIFIED_STAGING` 积压。
 
 ```bash
-# 终端 1：Prefect 服务
 deactivate
-py -m uv run prefect server start
-
-# 终端 2
+uv run prefect server start
 export PREFECT_API_URL=http://127.0.0.1:4200/api
-
-# 1. 集成循环
-py -m uv run python -m scripts.run_integration_loop --once
-
-# 2. 发布循环
-py -m uv run python -m scripts.run_publish_loop --once
+uv run python -m scripts.run_integration_loop --once
+uv run python -m scripts.run_publish_loop --once
 ```
 
 Prefect UI 中可见的顶层 Flow：

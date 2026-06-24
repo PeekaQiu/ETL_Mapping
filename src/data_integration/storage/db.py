@@ -134,7 +134,7 @@ def _ensure_files_schema(engine: Engine) -> None:
 
 
 def _normalize_legacy_status_values(engine: Engine) -> None:
-    # ponytail: one-shot SQL renames; safe to re-run (idempotent WHERE clauses)
+    # One-shot SQL renames; safe to re-run (idempotent WHERE clauses)
     with engine.begin() as connection:
         connection.exec_driver_sql(
             "UPDATE files SET status = 'ARCHIVED' WHERE status = 'ARCHIVED_B'"

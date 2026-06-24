@@ -9,7 +9,7 @@ from data_integration.runtime.locks import FlowAlreadyRunningError, integration_
 from data_integration.storage.models import FileStatus, ProcessingRunStatus
 from data_integration.tasks.archive import archive_run_impl
 from data_integration.tasks.classify import classify_run_impl
-from data_integration.tasks.validate import validate_and_publish_run_impl
+from tests.helpers import publish_run
 from tests.helpers import invoice_rule, make_config, make_repository, write_xml
 
 
@@ -50,7 +50,7 @@ def test_same_run_target_collision_quarantines_without_publish(tmp_path: Path) -
     run_id = archive_run_impl(config, repository)
     assert run_id is not None
     classify_run_impl(config, repository, run_id)
-    validate_and_publish_run_impl(config, repository, run_id)
+    publish_run(config, repository, run_id)
 
     run = repository.get_run(run_id)
     files = {Path(record.source_path).name: record for record in repository.get_run_files(run_id)}
@@ -91,7 +91,7 @@ def test_quarantined_target_does_not_block_later_fixed_source_run(tmp_path: Path
     failed_run_id = archive_run_impl(config, repository)
     assert failed_run_id is not None
     classify_run_impl(config, repository, failed_run_id)
-    validate_and_publish_run_impl(config, repository, failed_run_id)
+    publish_run(config, repository, failed_run_id)
     assert repository.summarize_run(failed_run_id)["success"] == 1
 
     (source_dir / "two.xml").unlink()
@@ -120,7 +120,7 @@ def test_replace_publish_overwrites_existing_formal_target(tmp_path: Path) -> No
     target.parent.mkdir(parents=True)
     target.write_text("pre-existing", encoding="utf-8")
 
-    validate_and_publish_run_impl(config, repository, run_id)
+    publish_run(config, repository, run_id)
 
     files = {Path(record.source_path).name: record for record in repository.get_run_files(run_id)}
     summary = repository.summarize_run(run_id)
@@ -160,7 +160,7 @@ def test_same_hash_retry_after_quarantine(tmp_path: Path) -> None:
     retry_run_id = archive_run_impl(fixed_config, repository)
     assert retry_run_id is not None
     classify_run_impl(fixed_config, repository, retry_run_id)
-    validate_and_publish_run_impl(fixed_config, repository, retry_run_id)
+    publish_run(fixed_config, repository, retry_run_id)
 
     summary = repository.summarize_run(retry_run_id)
     assert summary["success"] == 1

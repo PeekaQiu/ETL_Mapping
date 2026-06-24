@@ -85,6 +85,30 @@ def validate_and_prepublish_run_impl(
 
         staging_path = Path(record.staging_path or "")
         prepublish_path = Path(record.prepublish_path or "")
+        older_records = repository.find_older_inflight_replace_records(record)
+        if older_records:
+            quarantine_paths = {
+                older.id: (
+                    _quarantine_superseded_staging_file(config, older)
+                    or _quarantine_superseded_prepublish_file(config, older)
+                )
+                for older in older_records
+            }
+            superseded_count += repository.supersede_older_inflight_replace_records(
+                record,
+                quarantine_paths=quarantine_paths,
+            )
+            for older in older_records:
+                _finalize_run_if_fully_superseded(repository, older.run_id)
+            logger.debug(
+                "Superseded older inflight replace records before prepublish | %s",
+                log_fields(
+                    run_id=run_id,
+                    source=source_name,
+                    superseded=len(older_records),
+                    revision=record.config_revision,
+                ),
+            )
         try:
             promote_file(
                 staging_path,
@@ -244,13 +268,27 @@ def _quarantine_superseded_staging_file(config: IntegrationConfig, record: FileR
     return move_to_quarantine(staging_path, config.directories.quarantine_dir, record.run_id, "superseded")
 
 
-def validate_and_publish_run_impl(
-    config: IntegrationConfig,
-    repository: IntegrationRepository,
-    run_id: str,
-) -> str:
-    from data_integration.tasks.publish import publish_prepublished_run_impl
+def _quarantine_superseded_prepublish_file(config: IntegrationConfig, record: FileRecord) -> Path | None:
+    if not record.prepublish_path:
+        return None
+    prepublish_path = Path(record.prepublish_path)
+    if not prepublish_path.exists():
+        return None
+    return move_to_quarantine(
+        prepublish_path,
+        config.directories.quarantine_dir,
+        record.run_id,
+        "superseded",
+    )
 
-    validate_and_prepublish_run_impl(config, repository, run_id)
-    publish_prepublished_run_impl(config, repository, run_id=run_id)
-    return run_id
+
+def _finalize_run_if_fully_superseded(repository: IntegrationRepository, run_id: str) -> None:
+    files = repository.get_run_files(run_id)
+    statuses = {record.status for record in files}
+    if statuses and statuses <= {FileStatus.SUPERSEDED.value}:
+        repository.mark_run(
+            run_id,
+            ProcessingRunStatus.COMPLETED_WITH_ERRORS,
+            "All prepublished files were superseded by newer revisions.",
+        )
+

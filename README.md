@@ -8,19 +8,20 @@
 
 ```bash
 # 终端 1：Prefect 服务
-uv run prefect server start
+deactivate
+py -m uv run prefect server start
 
 # 终端 2
 export PREFECT_API_URL=http://127.0.0.1:4200/api
 
 # 1. 配置刷新
-uv run python -m scripts.init_config --prepare-dirs --overwrite
+py -m uv run python -m scripts.init_config --prepare-dirs --overwrite
 
 # 2. 集成循环
-uv run python -m scripts.run_integration_loop --once
+py -m uv run python -m scripts.run_integration_loop --once
 
 # 3. 发布循环
-uv run python -m scripts.run_publish_loop --once
+py -m uv run python -m scripts.run_publish_loop --once
 ```
 
 Prefect UI 中可见的顶层 Flow：

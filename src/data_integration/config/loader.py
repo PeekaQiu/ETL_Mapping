@@ -27,20 +27,6 @@ def validate_config_payload(payload: Any) -> IntegrationConfig:
         raise ValueError(f"Invalid data integration config: {exc}") from exc
 
 
-def load_bulk_config(
-    *,
-    variable_name: str = DEFAULT_BULK_CONFIG_VARIABLE,
-    config_path: str | Path | None = None,
-) -> BulkIntegrationConfig:
-    if config_path is not None:
-        return read_bulk_config_file(config_path)
-
-    raw_config = Variable.get(variable_name, default=None)
-    if raw_config is None:
-        raise ValueError(f"Prefect Variable not found: {variable_name}")
-    return validate_bulk_config_payload(_decode_variable(raw_config))
-
-
 def validate_bulk_config_payload(payload: Any) -> BulkIntegrationConfig:
     try:
         return BulkIntegrationConfig.model_validate(payload)

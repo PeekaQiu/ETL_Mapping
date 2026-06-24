@@ -10,16 +10,9 @@ from data_integration.config.schema import IntegrationConfig
 from data_integration.logging_setup import log_fields, task_logger
 from data_integration.prefect_ui import TASK_RETENTION, TASK_RETENTION_DESC
 from data_integration.storage.db import build_engine, build_session_factory, init_db
-from data_integration.storage.models import FileStatus
 from data_integration.storage.repository import IntegrationRepository
 
 _LOGGER = task_logger(__name__)
-
-TERMINAL_STATUSES = [
-    FileStatus.PUBLISHED,
-    FileStatus.QUARANTINED,
-    FileStatus.FAILED,
-]
 
 
 @task(name=TASK_RETENTION, description=TASK_RETENTION_DESC, retries=0)
@@ -41,18 +34,18 @@ def cleanup_archive_retention_impl(config: IntegrationConfig, repository: Integr
         ),
     )
 
-    cutoff = time.time() - (config.runtime.archive_retention_days * 24 * 60 * 60)
+    run_cutoff = datetime.now() - timedelta(days=config.runtime.archive_retention_days)
+    archive_mtime_cutoff = time.time() - (config.runtime.archive_retention_days * 24 * 60 * 60)
     deleted_archives = 0
-    for status in TERMINAL_STATUSES:
-        for record in repository.get_files_for_status(status):
-            archive_path = Path(record.archive_path)
-            if archive_path.exists() and archive_path.stat().st_mtime <= cutoff:
-                archive_path.unlink()
-                deleted_archives += 1
-                logger.debug(
-                    "Deleted expired archive file | %s",
-                    log_fields(path=archive_path, status=status.value, run_id=record.run_id),
-                )
+    for record in repository.get_terminal_files_for_retention(run_cutoff):
+        archive_path = Path(record.archive_path)
+        if archive_path.exists() and archive_path.stat().st_mtime <= archive_mtime_cutoff:
+            archive_path.unlink()
+            deleted_archives += 1
+            logger.debug(
+                "Deleted expired archive file | %s",
+                log_fields(path=archive_path, status=record.status, run_id=record.run_id),
+            )
 
     deleted_dirs = 0
     if config.runtime.cleanup_empty_dirs:

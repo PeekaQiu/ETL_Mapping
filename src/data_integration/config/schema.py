@@ -125,7 +125,6 @@ class RuleConfig(BaseModel):
 
 
 class NotificationConfig(BaseModel):
-    dry_run: bool = True
     recipients: list[str] = Field(default_factory=list)
 
 

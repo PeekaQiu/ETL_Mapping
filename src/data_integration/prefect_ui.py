@@ -12,9 +12,6 @@ FLOW_INTEGRATION_LOOP_DESC = "Process new XML files for every enabled data sourc
 FLOW_PUBLISH_LOOP = "publish-loop"
 FLOW_PUBLISH_LOOP_DESC = "Move staged files to their final published locations."
 
-FLOW_BULK_CONTROLLER = "bulk-sources-controller"
-FLOW_BULK_CONTROLLER_DESC = "Run the ingest pipeline across all configured data sources."
-
 # Top-level source tasks
 TASK_INTEGRATE_SOURCE = "Integrate Source"
 TASK_INTEGRATE_SOURCE_DESC = "Archive, classify, validate, and stage files for one data source."

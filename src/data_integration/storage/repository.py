@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -45,6 +45,11 @@ _ACTIVE_FINAL_TARGET_STATUSES = frozenset(
         FileStatus.PREPUBLISHED.value,
         FileStatus.PUBLISHED.value,
     }
+)
+_TERMINAL_RETENTION_STATUSES = (
+    FileStatus.PUBLISHED,
+    FileStatus.QUARANTINED,
+    FileStatus.FAILED,
 )
 
 
@@ -167,6 +172,26 @@ class IntegrationRepository:
                 session.expunge(record)
             return records
 
+    def count_files_by_status(self, status: FileStatus) -> int:
+        with self._session_factory() as session:
+            stmt = select(func.count()).select_from(FileRecord).where(FileRecord.status == status.value)
+            return int(session.scalar(stmt) or 0)
+
+    def get_terminal_files_for_retention(self, cutoff: datetime) -> list[FileRecord]:
+        with self._session_factory() as session:
+            stmt = (
+                select(FileRecord)
+                .join(ProcessingRun, FileRecord.run_id == ProcessingRun.id)
+                .where(
+                    FileRecord.status.in_([status.value for status in _TERMINAL_RETENTION_STATUSES]),
+                    ProcessingRun.created_at < cutoff,
+                )
+            )
+            records = list(session.scalars(stmt).all())
+            for record in records:
+                session.expunge(record)
+            return records
+
     def record_rule_match(
         self,
         *,
@@ -282,7 +307,6 @@ class IntegrationRepository:
         self,
         *,
         source_path: Path,
-        sha256: str,
         logical_target_path: Path,
     ) -> FileRecord | None:
         with self._session_factory() as session:
@@ -290,7 +314,6 @@ class IntegrationRepository:
                 select(FileRecord)
                 .where(
                     FileRecord.source_path == str(source_path),
-                    FileRecord.sha256 == sha256,
                     FileRecord.logical_target_path == str(logical_target_path),
                     FileRecord.publish_mode == "replace",
                     ~FileRecord.status.in_(_RETRYABLE_FILE_STATUSES | _SUPERSEDED_FILE_STATUSES),
@@ -308,12 +331,55 @@ class IntegrationRepository:
             return None
         latest = self.get_latest_replace_file(
             source_path=Path(record.source_path),
-            sha256=record.sha256,
             logical_target_path=Path(record.logical_target_path),
         )
         if latest is None or latest.id == record.id:
             return None
-        return latest
+        if (latest.config_revision, latest.id) > (record.config_revision, record.id):
+            return latest
+        return None
+
+    def find_older_inflight_replace_records(self, record: FileRecord) -> list[FileRecord]:
+        if record.publish_mode != "replace" or not record.logical_target_path:
+            return []
+        with self._session_factory() as session:
+            stmt = select(FileRecord).where(
+                FileRecord.source_path == record.source_path,
+                FileRecord.logical_target_path == record.logical_target_path,
+                FileRecord.publish_mode == "replace",
+                FileRecord.status.in_(_ACTIVE_REPLACE_COLLISION_STATUSES),
+                FileRecord.id != record.id,
+            )
+            candidates = list(session.scalars(stmt).all())
+            older: list[FileRecord] = []
+            for existing in candidates:
+                if existing.config_revision < record.config_revision:
+                    older.append(existing)
+                elif existing.config_revision == record.config_revision and existing.id < record.id:
+                    older.append(existing)
+            for item in older:
+                session.expunge(item)
+            return older
+
+    def supersede_older_inflight_replace_records(
+        self,
+        record: FileRecord,
+        *,
+        quarantine_paths: dict[int, Path | None] | None = None,
+    ) -> int:
+        paths = quarantine_paths or {}
+        older_records = self.find_older_inflight_replace_records(record)
+        for older in older_records:
+            self.mark_file_superseded(
+                older.id,
+                superseded_by_file_id=record.id,
+                quarantine_path=paths.get(older.id),
+                message=(
+                    f"superseded by newer revision {record.config_revision} "
+                    f"for {record.logical_target_path}"
+                ),
+            )
+        return len(older_records)
 
     def summarize_run(self, run_id: str) -> dict:
         files = self.get_run_files(run_id)
@@ -392,9 +458,12 @@ class IntegrationRepository:
                 FileRecord.id != file_id,
             )
             for existing in session.scalars(stmt):
-                if existing.source_path == str(source_path) and existing.sha256 == sha256:
-                    if existing.config_revision <= config_revision:
-                        continue
+                if existing.source_path != str(source_path):
+                    return True
+                if existing.config_revision < config_revision:
+                    continue
+                if existing.config_revision == config_revision and existing.sha256 == sha256:
+                    continue
                 return True
             return False
 

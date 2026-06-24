@@ -15,7 +15,6 @@ from data_integration.prefect_ui import (
     source_step_desc,
     source_step_name,
 )
-from data_integration.notifications.base import LoggingNotifier, NotificationMessage
 from data_integration.runtime.locks import FlowAlreadyRunningError, integration_lock
 from data_integration.storage.db import build_engine, build_session_factory, init_db
 from data_integration.storage.repository import IntegrationRepository
@@ -100,13 +99,14 @@ def _run_integration_steps(
             "Integration failed | %s",
             log_fields(source=source_name or "-", run_id=run_id or "-", error=str(exc)),
         )
-        notifier = LoggingNotifier()
-        notifier.send(
-            NotificationMessage(
+        recipients = ",".join(config.notifications.recipients) or "-"
+        logger.warning(
+            "Integration failure notification | %s",
+            log_fields(
                 subject="Data Integration Process failed",
+                recipients=recipients,
                 body=str(exc),
-                recipients=config.notifications.recipients,
-            )
+            ),
         )
         raise
 

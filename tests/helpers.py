@@ -73,3 +73,12 @@ def invoice_rule(
 def write_xml(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
+
+
+def publish_run(config: IntegrationConfig, repository: IntegrationRepository, run_id: str) -> str:
+    from data_integration.tasks.publish import publish_prepublished_run_impl
+    from data_integration.tasks.validate import validate_and_prepublish_run_impl
+
+    validate_and_prepublish_run_impl(config, repository, run_id)
+    publish_prepublished_run_impl(config, repository, run_id=run_id)
+    return run_id

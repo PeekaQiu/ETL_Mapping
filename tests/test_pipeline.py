@@ -8,7 +8,8 @@ from data_integration.files.safety import sha256_file
 from data_integration.tasks.publish import publish_prepublished_run_impl
 from data_integration.tasks.archive import archive_run_impl
 from data_integration.tasks.classify import classify_run_impl
-from data_integration.tasks.validate import validate_and_prepublish_run_impl, validate_and_publish_run_impl
+from tests.helpers import publish_run
+from data_integration.tasks.validate import validate_and_prepublish_run_impl
 
 
 def test_pipeline_archives_classifies_and_publishes(tmp_path: Path) -> None:
@@ -24,7 +25,7 @@ def test_pipeline_archives_classifies_and_publishes(tmp_path: Path) -> None:
     run_id = archive_run_impl(config, repository)
     assert run_id is not None
     classify_run_impl(config, repository, run_id)
-    validate_and_publish_run_impl(config, repository, run_id)
+    publish_run(config, repository, run_id)
 
     run = repository.get_run(run_id)
     files = repository.get_run_files(run_id)
@@ -184,21 +185,92 @@ def test_repository_returns_latest_replace_file_for_logical_target(tmp_path: Pat
     first_run_id = archive_run_impl(config_v1, repository)
     assert first_run_id is not None
     classify_run_impl(config_v1, repository, first_run_id)
-    validate_and_publish_run_impl(config_v1, repository, first_run_id)
+    publish_run(config_v1, repository, first_run_id)
 
     config_v2 = _config(tmp_path, config_revision=2)
+    source_path.write_text(
+        "<Document><Type>INVOICE</Type><Revision>2</Revision></Document>",
+        encoding="utf-8",
+    )
     second_run_id = archive_run_impl(config_v2, repository)
     assert second_run_id is not None
     classify_run_impl(config_v2, repository, second_run_id)
 
     latest = repository.get_latest_replace_file(
         source_path=source_path,
-        sha256=sha256_file(source_path),
         logical_target_path=config_v2.directories.output_root / "invoice" / "invoice.xml",
     )
     assert latest is not None
     assert latest.run_id == second_run_id
     assert latest.config_revision == 2
+    assert latest.sha256 == sha256_file(source_path)
+
+
+def test_newer_content_replaces_old_prepublish_wait(tmp_path: Path) -> None:
+    config_v1 = _config(tmp_path, config_revision=1)
+    source_dir = config_v1.directories.source_dirs[0]
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "invoice.xml"
+    source_path.write_text("<Document><Type>INVOICE</Type><Rev>1</Rev></Document>", encoding="utf-8")
+    repository = _repository(config_v1)
+
+    first_run_id = archive_run_impl(config_v1, repository)
+    assert first_run_id is not None
+    classify_run_impl(config_v1, repository, first_run_id)
+    validate_and_prepublish_run_impl(config_v1, repository, first_run_id)
+
+    first_file = repository.get_run_files(first_run_id)[0]
+    assert first_file.status == FileStatus.PREPUBLISHED.value
+
+    config_v2 = _config(tmp_path, config_revision=2)
+    source_path.write_text("<Document><Type>INVOICE</Type><Rev>2</Rev></Document>", encoding="utf-8")
+    second_run_id = archive_run_impl(config_v2, repository)
+    assert second_run_id is not None
+    classify_run_impl(config_v2, repository, second_run_id)
+    validate_and_prepublish_run_impl(config_v2, repository, second_run_id)
+
+    published_count = publish_prepublished_run_impl(config_v2, repository)
+
+    first_file = repository.get_run_files(first_run_id)[0]
+    second_file = repository.get_run_files(second_run_id)[0]
+    output_path = config_v2.directories.output_root / "invoice" / "invoice.xml"
+
+    assert published_count == 1
+    assert first_file.status == FileStatus.SUPERSEDED.value
+    assert first_file.superseded_by_file_id == second_file.id
+    assert second_file.status == FileStatus.PUBLISHED.value
+    assert repository.get_run(second_run_id).status == ProcessingRunStatus.PUBLISHED.value
+    assert output_path.exists()
+    assert "<Rev>2</Rev>" in output_path.read_text(encoding="utf-8")
+    assert sha256_file(output_path) == sha256_file(source_path)
+
+
+def test_older_content_blocked_when_newer_in_prepublish(tmp_path: Path) -> None:
+    config_v2 = _config(tmp_path, config_revision=2)
+    source_dir = config_v2.directories.source_dirs[0]
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "invoice.xml"
+    source_path.write_text("<Document><Type>INVOICE</Type><Rev>2</Rev></Document>", encoding="utf-8")
+    repository = _repository(config_v2)
+
+    second_run_id = archive_run_impl(config_v2, repository)
+    assert second_run_id is not None
+    classify_run_impl(config_v2, repository, second_run_id)
+    validate_and_prepublish_run_impl(config_v2, repository, second_run_id)
+
+    second_file = repository.get_run_files(second_run_id)[0]
+    assert second_file.status == FileStatus.PREPUBLISHED.value
+
+    config_v1 = _config(tmp_path, config_revision=1)
+    source_path.write_text("<Document><Type>INVOICE</Type><Rev>1</Rev></Document>", encoding="utf-8")
+    first_run_id = archive_run_impl(config_v1, repository)
+    assert first_run_id is not None
+    classify_run_impl(config_v1, repository, first_run_id)
+
+    first_file = repository.get_run_files(first_run_id)[0]
+    assert first_file.status == FileStatus.QUARANTINED.value
+    assert second_file.status == FileStatus.PREPUBLISHED.value
+    assert not (config_v1.directories.output_root / "invoice" / "invoice.xml").exists()
 
 
 def test_archive_collects_all_incremental_files_in_one_run(tmp_path: Path) -> None:
@@ -295,13 +367,13 @@ def test_supplement_mode_publishes_multiple_revisions_side_by_side(tmp_path: Pat
     first_run_id = archive_run_impl(config_v1, repository)
     assert first_run_id is not None
     classify_run_impl(config_v1, repository, first_run_id)
-    validate_and_publish_run_impl(config_v1, repository, first_run_id)
+    publish_run(config_v1, repository, first_run_id)
 
     config_v2 = _config(tmp_path, config_revision=2, rules=rules)
     second_run_id = archive_run_impl(config_v2, repository)
     assert second_run_id is not None
     classify_run_impl(config_v2, repository, second_run_id)
-    validate_and_publish_run_impl(config_v2, repository, second_run_id)
+    publish_run(config_v2, repository, second_run_id)
 
     first_file = repository.get_run_files(first_run_id)[0]
     second_file = repository.get_run_files(second_run_id)[0]

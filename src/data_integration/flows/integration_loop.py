@@ -42,11 +42,9 @@ def run_integration_cycle(
             stop_on_failure=stop_on_failure,
         ),
     )
-    for source_name, config_path in sources:
-        logger.debug("Queued source | %s", log_fields(source=source_name, config=config_path))
-
     results: dict[str, str | None] = {}
     for source_name, config_path in sources:
+        logger.debug("Queued source | %s", log_fields(source=source_name, config=config_path))
         logger.info("Running integration for source | %s", log_fields(source=source_name, config=config_path))
         source_task = integrate_source.with_options(
             name=source_integrate_name(source_name),

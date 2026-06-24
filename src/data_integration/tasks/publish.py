@@ -15,6 +15,8 @@ from data_integration.storage.repository import IntegrationRepository
 
 _LOGGER = task_logger(__name__)
 
+_PREPUBLISH_BACKLOG_WARNING_THRESHOLD = 1000
+
 
 @task(name=TASK_PUBLISH_PREPUBLISHED, description=TASK_PUBLISH_PREPUBLISHED_DESC, retries=0)
 def publish_prepublished_files(config: IntegrationConfig, run_id: str | None = None) -> int:
@@ -31,15 +33,29 @@ def publish_prepublished_run_impl(
     run_id: str | None = None,
 ) -> int:
     logger = _LOGGER
-    prepublished_files = _get_prepublished_files(repository, run_id=run_id)
     scope = run_id or "all"
+    pending = repository.count_files_by_status(FileStatus.PREPUBLISHED)
+    if pending > _PREPUBLISH_BACKLOG_WARNING_THRESHOLD:
+        logger.warning(
+            "Prepublish backlog high | %s",
+            log_fields(scope=scope, pending=pending),
+        )
+
+    prepublished_files = _get_prepublished_files(repository, run_id=run_id)
     if not prepublished_files:
-        logger.info("No prepublished files pending formal publish | %s", log_fields(scope=scope))
+        logger.info(
+            "No prepublished files pending formal publish | %s",
+            log_fields(scope=scope, pending=pending),
+        )
         return 0
 
     logger.info(
         "Starting formal publish | %s",
-        log_fields(scope=scope, pending_count=len(prepublished_files)),
+        log_fields(
+            scope=scope,
+            pending=pending,
+            **({"scope_count": len(prepublished_files)} if run_id is not None else {}),
+        ),
     )
 
     failures: list[str] = []

@@ -11,7 +11,7 @@ from data_integration.prefect_ui import (
     TASK_ARCHIVE,
     TASK_CLASSIFY,
     TASK_RETENTION,
-    TASK_VALIDATE_PREPUBLISH,
+    TASK_PREPUBLISH,
     source_step_desc,
     source_step_name,
 )
@@ -20,13 +20,13 @@ from data_integration.storage.db import build_engine, build_session_factory, ini
 from data_integration.storage.repository import IntegrationRepository
 from data_integration.tasks.archive import archive_files
 from data_integration.tasks.classify import ClassificationRunError, classify_files
-from data_integration.tasks.retention import cleanup_archive_retention
-from data_integration.tasks.validate import validate_and_prepublish_files
+from data_integration.tasks.retention import apply_retention
+from data_integration.tasks.validate import prepublish_files
 
 _LOGGER = task_logger(__name__)
 
 
-def run_data_integration_impl(
+def run_integration(
     config_variable: str | None = None,
     config_path: str | None = None,
     source_name: str | None = None,
@@ -79,13 +79,13 @@ def _run_integration_steps(
         _source_task(classify_files, source_name, TASK_CLASSIFY)(config, run_id)
 
         logger.info("Step 3/4: validate and prepublish | %s", log_fields(run_id=run_id))
-        _source_task(validate_and_prepublish_files, source_name, TASK_VALIDATE_PREPUBLISH)(
+        _source_task(prepublish_files, source_name, TASK_PREPUBLISH)(
             config,
             run_id,
         )
 
         logger.info("Step 4/4: archive retention cleanup | %s", log_fields(run_id=run_id))
-        deleted = _source_task(cleanup_archive_retention, source_name, TASK_RETENTION)(config)
+        deleted = _source_task(apply_retention, source_name, TASK_RETENTION)(config)
         logger.info("Retention cleanup complete | %s", log_fields(run_id=run_id, deleted=deleted))
 
         _log_run_summary(config, run_id, logger)

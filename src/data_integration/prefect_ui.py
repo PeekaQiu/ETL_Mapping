@@ -26,11 +26,11 @@ TASK_ARCHIVE_DESC = "Pick up stable XML files and copy them to the archive."
 TASK_CLASSIFY = "Step 2: Classify Files"
 TASK_CLASSIFY_DESC = "Match each file to a business rule and prepare staging paths."
 
-TASK_VALIDATE_PREPUBLISH = "Step 3: Validate and Prepublish Files"
-TASK_VALIDATE_PREPUBLISH_DESC = "Validate staged files and copy them to the prepublish area."
+TASK_PREPUBLISH = "Step 3: Validate and Prepublish Files"
+TASK_PREPUBLISH_DESC = "Validate staged files and copy them to the prepublish area."
 
-TASK_PUBLISH_PREPUBLISHED = "Publish Prepublished Files"
-TASK_PUBLISH_PREPUBLISHED_DESC = "Promote prepublished files to their final output paths."
+TASK_FORMAL_PUBLISH = "Publish Prepublished Files"
+TASK_FORMAL_PUBLISH_DESC = "Promote prepublished files to their final output paths."
 
 TASK_RETENTION = "Step 4: Cleanup Archive Retention"
 TASK_RETENTION_DESC = "Remove archive files older than the retention period."
@@ -38,7 +38,7 @@ TASK_RETENTION_DESC = "Remove archive files older than the retention period."
 STEP_DESCRIPTIONS: dict[str, str] = {
     TASK_ARCHIVE: TASK_ARCHIVE_DESC,
     TASK_CLASSIFY: TASK_CLASSIFY_DESC,
-    TASK_VALIDATE_PREPUBLISH: TASK_VALIDATE_PREPUBLISH_DESC,
+    TASK_PREPUBLISH: TASK_PREPUBLISH_DESC,
     TASK_RETENTION: TASK_RETENTION_DESC,
 }
 

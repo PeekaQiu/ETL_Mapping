@@ -14,21 +14,21 @@ from data_integration.prefect_ui import (
     TASK_CLASSIFY_DESC,
     TASK_INTEGRATE_SOURCE,
     TASK_INTEGRATE_SOURCE_DESC,
-    TASK_PUBLISH_PREPUBLISHED,
-    TASK_PUBLISH_PREPUBLISHED_DESC,
+    TASK_FORMAL_PUBLISH,
+    TASK_FORMAL_PUBLISH_DESC,
     TASK_PUBLISH_SOURCE,
     TASK_PUBLISH_SOURCE_DESC,
+    TASK_PREPUBLISH,
+    TASK_PREPUBLISH_DESC,
     TASK_RETENTION,
     TASK_RETENTION_DESC,
-    TASK_VALIDATE_PREPUBLISH,
-    TASK_VALIDATE_PREPUBLISH_DESC,
 )
 from data_integration.tasks.archive import archive_files
 from data_integration.tasks.classify import classify_files
-from data_integration.tasks.publish import publish_prepublished_files
-from data_integration.tasks.retention import cleanup_archive_retention
+from data_integration.tasks.publish import publish_files
+from data_integration.tasks.retention import apply_retention
 from data_integration.tasks.source_run import integrate_source, publish_source
-from data_integration.tasks.validate import validate_and_prepublish_files
+from data_integration.tasks.validate import prepublish_files
 
 
 def test_prefect_flows_have_business_names_and_descriptions() -> None:
@@ -49,9 +49,9 @@ def test_prefect_tasks_have_business_names_and_descriptions() -> None:
     assert archive_files.description == TASK_ARCHIVE_DESC
     assert classify_files.name == TASK_CLASSIFY
     assert classify_files.description == TASK_CLASSIFY_DESC
-    assert validate_and_prepublish_files.name == TASK_VALIDATE_PREPUBLISH
-    assert validate_and_prepublish_files.description == TASK_VALIDATE_PREPUBLISH_DESC
-    assert publish_prepublished_files.name == TASK_PUBLISH_PREPUBLISHED
-    assert publish_prepublished_files.description == TASK_PUBLISH_PREPUBLISHED_DESC
-    assert cleanup_archive_retention.name == TASK_RETENTION
-    assert cleanup_archive_retention.description == TASK_RETENTION_DESC
+    assert prepublish_files.name == TASK_PREPUBLISH
+    assert prepublish_files.description == TASK_PREPUBLISH_DESC
+    assert publish_files.name == TASK_FORMAL_PUBLISH
+    assert publish_files.description == TASK_FORMAL_PUBLISH_DESC
+    assert apply_retention.name == TASK_RETENTION
+    assert apply_retention.description == TASK_RETENTION_DESC

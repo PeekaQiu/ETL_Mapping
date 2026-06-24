@@ -191,7 +191,7 @@ def classify_run_impl(
     return run_id
 
 
-def _target_variables(run_id: str, rule_id: str, source_path: Path, extracted_values: dict) -> dict:
+def _path_vars(run_id: str, rule_id: str, source_path: Path, extracted_values: dict) -> dict:
     now = datetime.now()
     return {
         "run_id": run_id,
@@ -217,7 +217,7 @@ def _resolve_target_paths(
     logical_target_path = render_safe_target(
         config.directories.output_root,
         target_path_template,
-        _target_variables(run_id, rule_id, source_path, extracted_values),
+        _path_vars(run_id, rule_id, source_path, extracted_values),
     )
     if publish_mode == "supplement":
         final_target_path = _versioned_target_path(logical_target_path, config.runtime.config_revision)

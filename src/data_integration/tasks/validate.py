@@ -7,7 +7,7 @@ from prefect import task
 from data_integration.config.schema import IntegrationConfig
 from data_integration.files.safety import move_to_quarantine, promote_file, sha256_file
 from data_integration.logging_setup import log_fields, task_logger
-from data_integration.prefect_ui import TASK_VALIDATE_PREPUBLISH, TASK_VALIDATE_PREPUBLISH_DESC
+from data_integration.prefect_ui import TASK_PREPUBLISH, TASK_PREPUBLISH_DESC
 from data_integration.storage.db import build_engine, build_session_factory, init_db
 from data_integration.storage.models import FileRecord, FileStatus, ProcessingRunStatus, ValidationStatus
 from data_integration.storage.repository import IntegrationRepository
@@ -15,15 +15,15 @@ from data_integration.storage.repository import IntegrationRepository
 _LOGGER = task_logger(__name__)
 
 
-@task(name=TASK_VALIDATE_PREPUBLISH, description=TASK_VALIDATE_PREPUBLISH_DESC, retries=0)
-def validate_and_prepublish_files(config: IntegrationConfig, run_id: str) -> str:
+@task(name=TASK_PREPUBLISH, description=TASK_PREPUBLISH_DESC, retries=0)
+def prepublish_files(config: IntegrationConfig, run_id: str) -> str:
     engine = build_engine(config.directories.sqlite_path)
     init_db(engine)
     repository = IntegrationRepository(build_session_factory(engine))
-    return validate_and_prepublish_run_impl(config, repository, run_id)
+    return prepublish_run_impl(config, repository, run_id)
 
 
-def validate_and_prepublish_run_impl(
+def prepublish_run_impl(
     config: IntegrationConfig,
     repository: IntegrationRepository,
     run_id: str,
@@ -49,9 +49,9 @@ def validate_and_prepublish_run_impl(
 
     for record in staged_files:
         source_name = Path(record.source_path).name
-        superseding_record = repository.get_superseding_replace_record(record)
+        superseding_record = repository.find_superseding_record(record)
         if superseding_record is not None:
-            quarantine_path = _quarantine_superseded_staging_file(config, record)
+            quarantine_path = _quarantine_staging(config, record)
             repository.mark_file_superseded(
                 record.id,
                 superseded_by_file_id=superseding_record.id,
@@ -76,7 +76,7 @@ def validate_and_prepublish_run_impl(
         file_errors = _validate_staged_file(record, targets_seen)
         if file_errors:
             failures.extend(file_errors)
-            _quarantine_staging_file(config, repository, record, "; ".join(file_errors))
+            _quarantine_failed_staging(config, repository, record, "; ".join(file_errors))
             logger.warning(
                 "Staging validation failed; file quarantined | %s",
                 log_fields(run_id=run_id, source=source_name, errors="; ".join(file_errors)),
@@ -85,21 +85,21 @@ def validate_and_prepublish_run_impl(
 
         staging_path = Path(record.staging_path or "")
         prepublish_path = Path(record.prepublish_path or "")
-        older_records = repository.find_older_inflight_replace_records(record)
+        older_records = repository.find_older_replace_records(record)
         if older_records:
             quarantine_paths = {
                 older.id: (
-                    _quarantine_superseded_staging_file(config, older)
-                    or _quarantine_superseded_prepublish_file(config, older)
+                    _quarantine_staging(config, older)
+                    or _quarantine_prepublish(config, older)
                 )
                 for older in older_records
             }
-            superseded_count += repository.supersede_older_inflight_replace_records(
+            superseded_count += repository.supersede_older_records(
                 record,
                 quarantine_paths=quarantine_paths,
             )
             for older in older_records:
-                _finalize_run_if_fully_superseded(repository, older.run_id)
+                _finalize_superseded_run(repository, older.run_id)
             logger.debug(
                 "Superseded older inflight replace records before prepublish | %s",
                 log_fields(
@@ -139,7 +139,7 @@ def validate_and_prepublish_run_impl(
                 )
                 repository.mark_file_quarantined(record.id, quarantine_path, f"prepublish failed: {message}")
             elif staging_path.exists():
-                _quarantine_staging_file(config, repository, record, f"prepublish failed: {message}")
+                _quarantine_failed_staging(config, repository, record, f"prepublish failed: {message}")
             else:
                 repository.mark_file_failed(record.id, f"prepublish failed: {message}")
             logger.warning(
@@ -237,7 +237,7 @@ def _validate_staged_file(record: FileRecord, targets_seen: set[str]) -> list[st
     return errors
 
 
-def _quarantine_staging_file(
+def _quarantine_failed_staging(
     config: IntegrationConfig,
     repository: IntegrationRepository,
     record: FileRecord,
@@ -259,7 +259,7 @@ def _quarantine_staging_file(
         repository.mark_file_quarantined(record.id, staging_path, message)
 
 
-def _quarantine_superseded_staging_file(config: IntegrationConfig, record: FileRecord) -> Path | None:
+def _quarantine_staging(config: IntegrationConfig, record: FileRecord) -> Path | None:
     if not record.staging_path:
         return None
     staging_path = Path(record.staging_path)
@@ -268,7 +268,7 @@ def _quarantine_superseded_staging_file(config: IntegrationConfig, record: FileR
     return move_to_quarantine(staging_path, config.directories.quarantine_dir, record.run_id, "superseded")
 
 
-def _quarantine_superseded_prepublish_file(config: IntegrationConfig, record: FileRecord) -> Path | None:
+def _quarantine_prepublish(config: IntegrationConfig, record: FileRecord) -> Path | None:
     if not record.prepublish_path:
         return None
     prepublish_path = Path(record.prepublish_path)
@@ -282,7 +282,7 @@ def _quarantine_superseded_prepublish_file(config: IntegrationConfig, record: Fi
     )
 
 
-def _finalize_run_if_fully_superseded(repository: IntegrationRepository, run_id: str) -> None:
+def _finalize_superseded_run(repository: IntegrationRepository, run_id: str) -> None:
     files = repository.get_run_files(run_id)
     statuses = {record.status for record in files}
     if statuses and statuses <= {FileStatus.SUPERSEDED.value}:
@@ -291,4 +291,3 @@ def _finalize_run_if_fully_superseded(repository: IntegrationRepository, run_id:
             ProcessingRunStatus.COMPLETED_WITH_ERRORS,
             "All prepublished files were superseded by newer revisions.",
         )
-

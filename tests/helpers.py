@@ -76,9 +76,9 @@ def write_xml(path: Path, body: str) -> None:
 
 
 def publish_run(config: IntegrationConfig, repository: IntegrationRepository, run_id: str) -> str:
-    from data_integration.tasks.publish import publish_prepublished_run_impl
-    from data_integration.tasks.validate import validate_and_prepublish_run_impl
+    from data_integration.tasks.publish import publish_run_impl
+    from data_integration.tasks.validate import prepublish_run_impl
 
-    validate_and_prepublish_run_impl(config, repository, run_id)
-    publish_prepublished_run_impl(config, repository, run_id=run_id)
+    prepublish_run_impl(config, repository, run_id)
+    publish_run_impl(config, repository, run_id=run_id)
     return run_id

@@ -8,25 +8,25 @@ from prefect import task
 from data_integration.config.schema import IntegrationConfig
 from data_integration.files.safety import move_to_quarantine, promote_file, sha256_file
 from data_integration.logging_setup import log_fields, task_logger
-from data_integration.prefect_ui import TASK_PUBLISH_PREPUBLISHED, TASK_PUBLISH_PREPUBLISHED_DESC
+from data_integration.prefect_ui import TASK_FORMAL_PUBLISH, TASK_FORMAL_PUBLISH_DESC
 from data_integration.storage.db import build_engine, build_session_factory, init_db
 from data_integration.storage.models import FileRecord, FileStatus, ProcessingRunStatus
 from data_integration.storage.repository import IntegrationRepository
 
 _LOGGER = task_logger(__name__)
 
-_PREPUBLISH_BACKLOG_WARNING_THRESHOLD = 1000
+_BACKLOG_WARN_AT = 1000
 
 
-@task(name=TASK_PUBLISH_PREPUBLISHED, description=TASK_PUBLISH_PREPUBLISHED_DESC, retries=0)
-def publish_prepublished_files(config: IntegrationConfig, run_id: str | None = None) -> int:
+@task(name=TASK_FORMAL_PUBLISH, description=TASK_FORMAL_PUBLISH_DESC, retries=0)
+def publish_files(config: IntegrationConfig, run_id: str | None = None) -> int:
     engine = build_engine(config.directories.sqlite_path)
     init_db(engine)
     repository = IntegrationRepository(build_session_factory(engine))
-    return publish_prepublished_run_impl(config, repository, run_id=run_id)
+    return publish_run_impl(config, repository, run_id=run_id)
 
 
-def publish_prepublished_run_impl(
+def publish_run_impl(
     config: IntegrationConfig,
     repository: IntegrationRepository,
     *,
@@ -35,13 +35,13 @@ def publish_prepublished_run_impl(
     logger = _LOGGER
     scope = run_id or "all"
     pending = repository.count_files_by_status(FileStatus.PREPUBLISHED)
-    if pending > _PREPUBLISH_BACKLOG_WARNING_THRESHOLD:
+    if pending > _BACKLOG_WARN_AT:
         logger.warning(
             "Prepublish backlog high | %s",
             log_fields(scope=scope, pending=pending),
         )
 
-    prepublished_files = _get_prepublished_files(repository, run_id=run_id)
+    prepublished_files = _list_prepublished(repository, run_id=run_id)
     if not prepublished_files:
         logger.info(
             "No prepublished files pending formal publish | %s",
@@ -67,7 +67,7 @@ def publish_prepublished_run_impl(
         touched_run_ids.add(record.run_id)
         source_name = Path(record.source_path).name
 
-        superseding_record = repository.get_superseding_replace_record(record)
+        superseding_record = repository.find_superseding_record(record)
         if superseding_record is not None:
             repository.mark_file_superseded(
                 record.id,
@@ -88,10 +88,10 @@ def publish_prepublished_run_impl(
             )
             continue
 
-        file_errors = _validate_prepublished_file(record)
+        file_errors = _check_for_publish(record)
         if file_errors:
             failures.extend(file_errors)
-            _quarantine_prepublished_file(config, repository, record, "; ".join(file_errors))
+            _quarantine_failed(config, repository, record, "; ".join(file_errors))
             logger.warning(
                 "Prepublish validation failed before formal publish | %s",
                 log_fields(run_id=record.run_id, source=source_name, errors="; ".join(file_errors)),
@@ -121,14 +121,14 @@ def publish_prepublished_run_impl(
         except Exception as exc:
             message = f"formal publish failed: {exc}"
             failures.append(f"{source_name}: {message}")
-            _quarantine_prepublished_file(config, repository, record, message)
+            _quarantine_failed(config, repository, record, message)
             logger.warning(
                 "Formal publish failed | %s",
                 log_fields(run_id=record.run_id, source=source_name, error=str(exc)),
             )
 
     for current_run_id in touched_run_ids:
-        _finalize_run_after_publish(repository, current_run_id, logger)
+        _finalize_run(repository, current_run_id, logger)
 
     if failures:
         logger.warning(
@@ -149,7 +149,7 @@ def publish_prepublished_run_impl(
     return published_count
 
 
-def _get_prepublished_files(
+def _list_prepublished(
     repository: IntegrationRepository,
     *,
     run_id: str | None,
@@ -164,7 +164,7 @@ def _publish_sort_key(record: FileRecord) -> tuple[str, int, int]:
     return (logical_target, -record.config_revision, -record.id)
 
 
-def _validate_prepublished_file(record: FileRecord) -> list[str]:
+def _check_for_publish(record: FileRecord) -> list[str]:
     errors: list[str] = []
     name = Path(record.source_path).name
     if not record.prepublish_path:
@@ -186,7 +186,7 @@ def _validate_prepublished_file(record: FileRecord) -> list[str]:
     return errors
 
 
-def _quarantine_prepublished_file(
+def _quarantine_failed(
     config: IntegrationConfig,
     repository: IntegrationRepository,
     record: FileRecord,
@@ -208,7 +208,7 @@ def _quarantine_prepublished_file(
     repository.mark_file_failed(record.id, message)
 
 
-def _finalize_run_after_publish(repository: IntegrationRepository, run_id: str, logger: Any) -> None:
+def _finalize_run(repository: IntegrationRepository, run_id: str, logger: Any) -> None:
     files = repository.get_run_files(run_id)
     statuses = {record.status for record in files}
     if FileStatus.PREPUBLISHED.value in statuses or FileStatus.CLASSIFIED_STAGING.value in statuses:

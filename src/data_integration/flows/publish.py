@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from prefect import flow
 
-from data_integration.config.loader import DEFAULT_BULK_CONTROLLER_CONFIG_PATH
+from data_integration.config.loader import DEFAULT_CONTROLLER_PATH
 from data_integration.flows.controller import (
     iter_enabled_sources,
     load_controller,
@@ -24,7 +24,7 @@ _LOGGER = task_logger(__name__)
 
 @flow(name=FLOW_PUBLISH_LOOP, description=FLOW_PUBLISH_LOOP_DESC)
 def run_publish_cycle(
-    controller_config_path: str = DEFAULT_BULK_CONTROLLER_CONFIG_PATH,
+    controller_config_path: str = DEFAULT_CONTROLLER_PATH,
     source_names: list[str] | None = None,
     stop_on_failure: bool = False,
 ) -> dict[str, int]:

@@ -20,7 +20,7 @@ def build_engine(sqlite_path: Path) -> Engine:
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     _ensure_files_schema(engine)
-    _normalize_legacy_status_values(engine)
+    _migrate_legacy_statuses(engine)
 
 
 def build_session_factory(engine: Engine) -> sessionmaker[Session]:
@@ -133,7 +133,7 @@ def _ensure_files_schema(engine: Engine) -> None:
         connection.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 
-def _normalize_legacy_status_values(engine: Engine) -> None:
+def _migrate_legacy_statuses(engine: Engine) -> None:
     # One-shot SQL renames; safe to re-run (idempotent WHERE clauses)
     with engine.begin() as connection:
         connection.exec_driver_sql(

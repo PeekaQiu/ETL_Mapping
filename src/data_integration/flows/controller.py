@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from data_integration.config.loader import (
-    DEFAULT_BULK_SOURCE_CONFIG_FILES,
+    DEFAULT_SOURCE_CONFIGS,
     read_bulk_config_file,
     read_config_file,
 )
@@ -55,7 +55,7 @@ def resolve_source_config_path(flow_config: FlowConfigRef, *, project_root_path:
     if flow_config.config_path:
         return resolve_project_path(flow_config.config_path, project_root_path)
     if flow_config.config_variable:
-        mapped = DEFAULT_BULK_SOURCE_CONFIG_FILES.get(flow_config.config_variable)
+        mapped = DEFAULT_SOURCE_CONFIGS.get(flow_config.config_variable)
         if mapped is not None:
             return resolve_project_path(mapped, project_root_path)
     raise ValueError(
@@ -69,12 +69,12 @@ def validate_source_configs(sources: list[tuple[str, Path]]) -> dict[str, Integr
         if not config_path.is_file():
             raise FileNotFoundError(f"source config not found for {source_name}: {config_path}")
         config = read_config_file(config_path)
-        _ensure_runtime_directories(config, source_name=source_name)
+        _ensure_dirs(config, source_name=source_name)
         validated[source_name] = config
     return validated
 
 
-def _ensure_runtime_directories(config: IntegrationConfig, *, source_name: str) -> None:
+def _ensure_dirs(config: IntegrationConfig, *, source_name: str) -> None:
     for source_dir in config.directories.source_dirs:
         if not source_dir.exists():
             raise FileNotFoundError(

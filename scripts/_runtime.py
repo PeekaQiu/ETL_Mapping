@@ -8,35 +8,28 @@ import time
 from pathlib import Path
 
 from data_integration.config.loader import (
-    DEFAULT_BULK_CONFIG_VARIABLE,
-    DEFAULT_BULK_CONTROLLER_CONFIG_PATH,
+    DEFAULT_CONTROLLER_VAR,
+    DEFAULT_CONTROLLER_PATH,
 )
 from data_integration.flows.controller import (
     load_controller as _load_controller,
+    project_root as _project_root,
     resolve_project_path as _resolve_project_path,
 )
 from data_integration.logging_setup import configure_logging as _configure_logging
 
 
 def bootstrap() -> Path:
-    project_root = find_project_root()
-    src_path = project_root / "src"
+    root = _project_root()
+    src_path = root / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
-    if Path.cwd().resolve() != project_root.resolve():
+    if Path.cwd().resolve() != root.resolve():
         import os
 
-        os.chdir(project_root)
-    logging.getLogger(__name__).debug("Bootstrapped project root | path=%s", project_root)
-    return project_root
-
-
-def find_project_root() -> Path:
-    current = Path(__file__).resolve().parent
-    for candidate in (current, *current.parents):
-        if (candidate / "pyproject.toml").is_file():
-            return candidate
-    raise RuntimeError("could not locate project root (missing pyproject.toml)")
+        os.chdir(root)
+    logging.getLogger(__name__).debug("Bootstrapped project root | path=%s", root)
+    return root
 
 
 def configure_logging(verbose: bool) -> None:
@@ -44,7 +37,7 @@ def configure_logging(verbose: bool) -> None:
 
 
 def resolve_path(path: str | Path, *, project_root: Path | None = None) -> Path:
-    root = project_root or find_project_root()
+    root = project_root or _project_root()
     return _resolve_project_path(path, root)
 
 
@@ -87,7 +80,7 @@ class GracefulStop:
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--controller",
-        default=DEFAULT_BULK_CONTROLLER_CONFIG_PATH,
+        default=DEFAULT_CONTROLLER_PATH,
         help="Bulk controller config file path.",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
@@ -118,4 +111,4 @@ def load_controller(controller_path: Path):
 
 
 def default_controller_variable() -> str:
-    return DEFAULT_BULK_CONFIG_VARIABLE
+    return DEFAULT_CONTROLLER_VAR

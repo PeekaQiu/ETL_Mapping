@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from data_integration.storage.models import FileStatus, ProcessingRunStatus
 from data_integration.tasks.archive import archive_run_impl
 from data_integration.tasks.classify import classify_run_impl
-from data_integration.tasks.retention import cleanup_archive_retention_impl
+from data_integration.tasks.retention import retention_run_impl
 from tests.helpers import make_config, make_repository, publish_run, write_xml
 
 
@@ -54,7 +54,7 @@ def test_archive_retention_deletes_only_terminal_old_archives(tmp_path: Path) ->
         run = repository._get_run(session, run_id)
         run.created_at = datetime.now() - timedelta(days=1)
 
-    deleted = cleanup_archive_retention_impl(config, repository)
+    deleted = retention_run_impl(config, repository)
 
     assert deleted >= 1
     assert not archive_path.exists()
@@ -87,7 +87,7 @@ def test_archive_retention_skips_recent_runs(tmp_path: Path) -> None:
     new_timestamp = time.time() - 60 * 24 * 60 * 60
     os.utime(new_archive_path, (new_timestamp, new_timestamp))
 
-    deleted = cleanup_archive_retention_impl(config, repository)
+    deleted = retention_run_impl(config, repository)
 
     assert deleted >= 1
     assert not old_archive_path.exists()

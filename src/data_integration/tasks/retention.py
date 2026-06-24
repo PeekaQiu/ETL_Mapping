@@ -16,14 +16,14 @@ _LOGGER = task_logger(__name__)
 
 
 @task(name=TASK_RETENTION, description=TASK_RETENTION_DESC, retries=0)
-def cleanup_archive_retention(config: IntegrationConfig) -> int:
+def apply_retention(config: IntegrationConfig) -> int:
     engine = build_engine(config.directories.sqlite_path)
     init_db(engine)
     repository = IntegrationRepository(build_session_factory(engine))
-    return cleanup_archive_retention_impl(config, repository)
+    return retention_run_impl(config, repository)
 
 
-def cleanup_archive_retention_impl(config: IntegrationConfig, repository: IntegrationRepository) -> int:
+def retention_run_impl(config: IntegrationConfig, repository: IntegrationRepository) -> int:
     logger = _LOGGER
     logger.info(
         "Starting archive retention cleanup | %s",
@@ -37,7 +37,7 @@ def cleanup_archive_retention_impl(config: IntegrationConfig, repository: Integr
     run_cutoff = datetime.now() - timedelta(days=config.runtime.archive_retention_days)
     archive_mtime_cutoff = time.time() - (config.runtime.archive_retention_days * 24 * 60 * 60)
     deleted_archives = 0
-    for record in repository.get_terminal_files_for_retention(run_cutoff):
+    for record in repository.list_retention_files(run_cutoff):
         archive_path = Path(record.archive_path)
         if archive_path.exists() and archive_path.stat().st_mtime <= archive_mtime_cutoff:
             archive_path.unlink()

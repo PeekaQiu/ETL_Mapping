@@ -3,10 +3,10 @@ from __future__ import annotations
 from prefect import flow
 
 from data_integration.config.loader import (
-    DEFAULT_BULK_CONFIG_VARIABLE,
-    DEFAULT_BULK_CONTROLLER_CONFIG_PATH,
-    DEFAULT_BULK_SOURCE_CONFIG_FILES,
-    initialize_bulk_sources_from_files,
+    DEFAULT_CONTROLLER_VAR,
+    DEFAULT_CONTROLLER_PATH,
+    DEFAULT_SOURCE_CONFIGS,
+    load_bulk_sources,
     read_config_file,
 )
 from data_integration.flows.controller import (
@@ -27,8 +27,8 @@ _LOGGER = task_logger(__name__)
 
 @flow(name=FLOW_CONFIG_REFRESH, description=FLOW_CONFIG_REFRESH_DESC)
 def refresh_config(
-    controller_config_path: str = DEFAULT_BULK_CONTROLLER_CONFIG_PATH,
-    controller_variable_name: str = DEFAULT_BULK_CONFIG_VARIABLE,
+    controller_config_path: str = DEFAULT_CONTROLLER_PATH,
+    controller_variable_name: str = DEFAULT_CONTROLLER_VAR,
     source_config_files: dict[str, str] | None = None,
     overwrite: bool = False,
     dry_run: bool = False,
@@ -71,10 +71,10 @@ def refresh_config(
             "dry_run": True,
         }
 
-    initialized_sources, loaded_controller = initialize_bulk_sources_from_files(
+    initialized_sources, loaded_controller = load_bulk_sources(
         controller_config_path=controller_path,
         controller_variable_name=controller_variable_name,
-        source_config_files=source_config_files or DEFAULT_BULK_SOURCE_CONFIG_FILES,
+        source_config_files=source_config_files or DEFAULT_SOURCE_CONFIGS,
         overwrite=overwrite,
     )
     logger.info(

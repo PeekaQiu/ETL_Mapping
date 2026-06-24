@@ -33,13 +33,13 @@ _RETRYABLE_FILE_STATUSES = frozenset(
     {FileStatus.QUARANTINED.value, FileStatus.FAILED.value}
 )
 _SUPERSEDED_FILE_STATUSES = frozenset({FileStatus.SUPERSEDED.value})
-_ACTIVE_REPLACE_COLLISION_STATUSES = frozenset(
+_ACTIVE_REPLACE_STATUSES = frozenset(
     {
         FileStatus.CLASSIFIED_STAGING.value,
         FileStatus.PREPUBLISHED.value,
     }
 )
-_ACTIVE_FINAL_TARGET_STATUSES = frozenset(
+_OCCUPIED_TARGET_STATUSES = frozenset(
     {
         FileStatus.CLASSIFIED_STAGING.value,
         FileStatus.PREPUBLISHED.value,
@@ -177,7 +177,7 @@ class IntegrationRepository:
             stmt = select(func.count()).select_from(FileRecord).where(FileRecord.status == status.value)
             return int(session.scalar(stmt) or 0)
 
-    def get_terminal_files_for_retention(self, cutoff: datetime) -> list[FileRecord]:
+    def list_retention_files(self, cutoff: datetime) -> list[FileRecord]:
         with self._session_factory() as session:
             stmt = (
                 select(FileRecord)
@@ -303,7 +303,7 @@ class IntegrationRepository:
                 )
             )
 
-    def get_latest_replace_file(
+    def find_latest_replace(
         self,
         *,
         source_path: Path,
@@ -326,10 +326,10 @@ class IntegrationRepository:
             session.expunge(record)
             return record
 
-    def get_superseding_replace_record(self, record: FileRecord) -> FileRecord | None:
+    def find_superseding_record(self, record: FileRecord) -> FileRecord | None:
         if record.publish_mode != "replace" or not record.logical_target_path:
             return None
-        latest = self.get_latest_replace_file(
+        latest = self.find_latest_replace(
             source_path=Path(record.source_path),
             logical_target_path=Path(record.logical_target_path),
         )
@@ -339,7 +339,7 @@ class IntegrationRepository:
             return latest
         return None
 
-    def find_older_inflight_replace_records(self, record: FileRecord) -> list[FileRecord]:
+    def find_older_replace_records(self, record: FileRecord) -> list[FileRecord]:
         if record.publish_mode != "replace" or not record.logical_target_path:
             return []
         with self._session_factory() as session:
@@ -347,7 +347,7 @@ class IntegrationRepository:
                 FileRecord.source_path == record.source_path,
                 FileRecord.logical_target_path == record.logical_target_path,
                 FileRecord.publish_mode == "replace",
-                FileRecord.status.in_(_ACTIVE_REPLACE_COLLISION_STATUSES),
+                FileRecord.status.in_(_ACTIVE_REPLACE_STATUSES),
                 FileRecord.id != record.id,
             )
             candidates = list(session.scalars(stmt).all())
@@ -361,14 +361,14 @@ class IntegrationRepository:
                 session.expunge(item)
             return older
 
-    def supersede_older_inflight_replace_records(
+    def supersede_older_records(
         self,
         record: FileRecord,
         *,
         quarantine_paths: dict[int, Path | None] | None = None,
     ) -> int:
         paths = quarantine_paths or {}
-        older_records = self.find_older_inflight_replace_records(record)
+        older_records = self.find_older_replace_records(record)
         for older in older_records:
             self.mark_file_superseded(
                 older.id,
@@ -454,7 +454,7 @@ class IntegrationRepository:
             stmt = select(FileRecord).where(
                 FileRecord.logical_target_path == str(logical_target_path),
                 FileRecord.publish_mode == "replace",
-                FileRecord.status.in_(_ACTIVE_REPLACE_COLLISION_STATUSES),
+                FileRecord.status.in_(_ACTIVE_REPLACE_STATUSES),
                 FileRecord.id != file_id,
             )
             for existing in session.scalars(stmt):
@@ -469,7 +469,7 @@ class IntegrationRepository:
 
         stmt = select(FileRecord.id).where(
             FileRecord.final_target_path == str(final_target_path),
-            FileRecord.status.in_(_ACTIVE_FINAL_TARGET_STATUSES),
+            FileRecord.status.in_(_OCCUPIED_TARGET_STATUSES),
             FileRecord.id != file_id,
         )
         return session.execute(stmt).first() is not None

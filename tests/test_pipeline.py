@@ -5,11 +5,11 @@ from data_integration.storage.db import build_engine, build_session_factory, ini
 from data_integration.storage.models import FileStatus, ProcessingRunStatus
 from data_integration.storage.repository import IntegrationRepository
 from data_integration.files.safety import sha256_file
-from data_integration.tasks.publish import publish_prepublished_run_impl
+from data_integration.tasks.publish import publish_run_impl
 from data_integration.tasks.archive import archive_run_impl
 from data_integration.tasks.classify import classify_run_impl
 from tests.helpers import publish_run
-from data_integration.tasks.validate import validate_and_prepublish_run_impl
+from data_integration.tasks.validate import prepublish_run_impl
 
 
 def test_pipeline_archives_classifies_and_publishes(tmp_path: Path) -> None:
@@ -54,7 +54,7 @@ def test_pipeline_prepublishes_before_scheduled_publish(tmp_path: Path) -> None:
     run_id = archive_run_impl(config, repository)
     assert run_id is not None
     classify_run_impl(config, repository, run_id)
-    validate_and_prepublish_run_impl(config, repository, run_id)
+    prepublish_run_impl(config, repository, run_id)
 
     prepublished_file = repository.get_run_files(run_id)[0]
     assert repository.get_run(run_id).status == ProcessingRunStatus.PREPUBLISHED.value
@@ -63,7 +63,7 @@ def test_pipeline_prepublishes_before_scheduled_publish(tmp_path: Path) -> None:
     assert Path(prepublished_file.prepublish_path).exists()
     assert not (config.directories.output_root / "invoice" / "invoice.xml").exists()
 
-    published_count = publish_prepublished_run_impl(config, repository, run_id=run_id)
+    published_count = publish_run_impl(config, repository, run_id=run_id)
 
     published_file = repository.get_run_files(run_id)[0]
     assert published_count == 1
@@ -85,15 +85,15 @@ def test_newer_replace_run_wins_formal_publish(tmp_path: Path) -> None:
     first_run_id = archive_run_impl(config_v1, repository)
     assert first_run_id is not None
     classify_run_impl(config_v1, repository, first_run_id)
-    validate_and_prepublish_run_impl(config_v1, repository, first_run_id)
+    prepublish_run_impl(config_v1, repository, first_run_id)
 
     config_v2 = _config(tmp_path, config_revision=2)
     second_run_id = archive_run_impl(config_v2, repository)
     assert second_run_id is not None
     classify_run_impl(config_v2, repository, second_run_id)
-    validate_and_prepublish_run_impl(config_v2, repository, second_run_id)
+    prepublish_run_impl(config_v2, repository, second_run_id)
 
-    published_count = publish_prepublished_run_impl(config_v2, repository)
+    published_count = publish_run_impl(config_v2, repository)
 
     first_file = repository.get_run_files(first_run_id)[0]
     second_file = repository.get_run_files(second_run_id)[0]
@@ -117,15 +117,15 @@ def test_specific_publish_run_skips_superseded_replace_prepublish(tmp_path: Path
     first_run_id = archive_run_impl(config_v1, repository)
     assert first_run_id is not None
     classify_run_impl(config_v1, repository, first_run_id)
-    validate_and_prepublish_run_impl(config_v1, repository, first_run_id)
+    prepublish_run_impl(config_v1, repository, first_run_id)
 
     config_v2 = _config(tmp_path, config_revision=2)
     second_run_id = archive_run_impl(config_v2, repository)
     assert second_run_id is not None
     classify_run_impl(config_v2, repository, second_run_id)
-    validate_and_prepublish_run_impl(config_v2, repository, second_run_id)
+    prepublish_run_impl(config_v2, repository, second_run_id)
 
-    published_count = publish_prepublished_run_impl(config_v1, repository, run_id=first_run_id)
+    published_count = publish_run_impl(config_v1, repository, run_id=first_run_id)
 
     first_file = repository.get_run_files(first_run_id)[0]
     second_file = repository.get_run_files(second_run_id)[0]
@@ -136,7 +136,7 @@ def test_specific_publish_run_skips_superseded_replace_prepublish(tmp_path: Path
     assert second_file.status == FileStatus.PREPUBLISHED.value
     assert not (config_v1.directories.output_root / "invoice" / "invoice.xml").exists()
 
-    assert publish_prepublished_run_impl(config_v2, repository, run_id=second_run_id) == 1
+    assert publish_run_impl(config_v2, repository, run_id=second_run_id) == 1
     assert repository.get_run(second_run_id).status == ProcessingRunStatus.PUBLISHED.value
     assert (config_v2.directories.output_root / "invoice" / "invoice.xml").exists()
 
@@ -196,7 +196,7 @@ def test_repository_returns_latest_replace_file_for_logical_target(tmp_path: Pat
     assert second_run_id is not None
     classify_run_impl(config_v2, repository, second_run_id)
 
-    latest = repository.get_latest_replace_file(
+    latest = repository.find_latest_replace(
         source_path=source_path,
         logical_target_path=config_v2.directories.output_root / "invoice" / "invoice.xml",
     )
@@ -217,7 +217,7 @@ def test_newer_content_replaces_old_prepublish_wait(tmp_path: Path) -> None:
     first_run_id = archive_run_impl(config_v1, repository)
     assert first_run_id is not None
     classify_run_impl(config_v1, repository, first_run_id)
-    validate_and_prepublish_run_impl(config_v1, repository, first_run_id)
+    prepublish_run_impl(config_v1, repository, first_run_id)
 
     first_file = repository.get_run_files(first_run_id)[0]
     assert first_file.status == FileStatus.PREPUBLISHED.value
@@ -227,9 +227,9 @@ def test_newer_content_replaces_old_prepublish_wait(tmp_path: Path) -> None:
     second_run_id = archive_run_impl(config_v2, repository)
     assert second_run_id is not None
     classify_run_impl(config_v2, repository, second_run_id)
-    validate_and_prepublish_run_impl(config_v2, repository, second_run_id)
+    prepublish_run_impl(config_v2, repository, second_run_id)
 
-    published_count = publish_prepublished_run_impl(config_v2, repository)
+    published_count = publish_run_impl(config_v2, repository)
 
     first_file = repository.get_run_files(first_run_id)[0]
     second_file = repository.get_run_files(second_run_id)[0]
@@ -256,7 +256,7 @@ def test_older_content_blocked_when_newer_in_prepublish(tmp_path: Path) -> None:
     second_run_id = archive_run_impl(config_v2, repository)
     assert second_run_id is not None
     classify_run_impl(config_v2, repository, second_run_id)
-    validate_and_prepublish_run_impl(config_v2, repository, second_run_id)
+    prepublish_run_impl(config_v2, repository, second_run_id)
 
     second_file = repository.get_run_files(second_run_id)[0]
     assert second_file.status == FileStatus.PREPUBLISHED.value

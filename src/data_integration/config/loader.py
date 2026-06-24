@@ -10,9 +10,9 @@ from prefect.variables import Variable
 from data_integration.config.schema import BulkIntegrationConfig, IntegrationConfig
 
 
-DEFAULT_BULK_CONFIG_VARIABLE = "bulk_sources_controller"
-DEFAULT_BULK_CONTROLLER_CONFIG_PATH = "config/bulk_sources_controller.json"
-DEFAULT_BULK_SOURCE_CONFIG_FILES = {
+DEFAULT_CONTROLLER_VAR = "bulk_sources_controller"
+DEFAULT_CONTROLLER_PATH = "config/bulk_sources_controller.json"
+DEFAULT_SOURCE_CONFIGS = {
     "bulk_source_1_config": "config/bulk_source_1_flow.json",
     "bulk_source_2_config": "config/bulk_source_2_flow.json",
     "bulk_source_3_config": "config/bulk_source_3_flow.json",
@@ -61,7 +61,7 @@ def set_config_variable(
 def set_bulk_config_variable(
     config: BulkIntegrationConfig,
     *,
-    variable_name: str = DEFAULT_BULK_CONFIG_VARIABLE,
+    variable_name: str = DEFAULT_CONTROLLER_VAR,
     overwrite: bool = True,
 ) -> None:
     Variable.set(
@@ -72,7 +72,7 @@ def set_bulk_config_variable(
     )
 
 
-def initialize_config_variable_from_file(
+def load_config_var(
     config_path: str | Path,
     *,
     variable_name: str,
@@ -83,10 +83,10 @@ def initialize_config_variable_from_file(
     return config
 
 
-def initialize_bulk_config_variable_from_file(
+def load_bulk_config_var(
     config_path: str | Path,
     *,
-    variable_name: str = DEFAULT_BULK_CONFIG_VARIABLE,
+    variable_name: str = DEFAULT_CONTROLLER_VAR,
     overwrite: bool = False,
 ) -> BulkIntegrationConfig:
     config = read_bulk_config_file(config_path)
@@ -94,14 +94,14 @@ def initialize_bulk_config_variable_from_file(
     return config
 
 
-def initialize_source_config_variables(
+def load_source_config_vars(
     mappings: dict[str, str | Path],
     *,
     overwrite: bool = False,
 ) -> dict[str, IntegrationConfig]:
     initialized: dict[str, IntegrationConfig] = {}
     for variable_name, config_path in mappings.items():
-        initialized[variable_name] = initialize_config_variable_from_file(
+        initialized[variable_name] = load_config_var(
             config_path,
             variable_name=variable_name,
             overwrite=overwrite,
@@ -109,16 +109,16 @@ def initialize_source_config_variables(
     return initialized
 
 
-def initialize_bulk_sources_from_files(
+def load_bulk_sources(
     *,
-    controller_config_path: str | Path = DEFAULT_BULK_CONTROLLER_CONFIG_PATH,
-    controller_variable_name: str = DEFAULT_BULK_CONFIG_VARIABLE,
+    controller_config_path: str | Path = DEFAULT_CONTROLLER_PATH,
+    controller_variable_name: str = DEFAULT_CONTROLLER_VAR,
     source_config_files: dict[str, str | Path] | None = None,
     overwrite: bool = False,
 ) -> tuple[dict[str, IntegrationConfig], BulkIntegrationConfig]:
-    source_mappings = source_config_files or DEFAULT_BULK_SOURCE_CONFIG_FILES
-    initialized_sources = initialize_source_config_variables(source_mappings, overwrite=overwrite)
-    controller = initialize_bulk_config_variable_from_file(
+    source_mappings = source_config_files or DEFAULT_SOURCE_CONFIGS
+    initialized_sources = load_source_config_vars(source_mappings, overwrite=overwrite)
+    controller = load_bulk_config_var(
         controller_config_path,
         variable_name=controller_variable_name,
         overwrite=overwrite,

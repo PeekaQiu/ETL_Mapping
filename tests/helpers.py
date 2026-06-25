@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from data_integration.config.schema import IntegrationConfig
-from data_integration.storage.db import build_engine, build_session_factory, init_db
+from data_integration.storage.db import open_repository
 from data_integration.storage.repository import IntegrationRepository
 
 
@@ -53,9 +53,7 @@ def make_config(tmp_path: Path, rules: list[dict[str, Any]] | None = None, **run
 
 
 def make_repository(config: IntegrationConfig) -> IntegrationRepository:
-    engine = build_engine(config.directories.sqlite_path)
-    init_db(engine)
-    return IntegrationRepository(build_session_factory(engine))
+    return open_repository(config.directories.sqlite_path)
 
 
 def invoice_rule(

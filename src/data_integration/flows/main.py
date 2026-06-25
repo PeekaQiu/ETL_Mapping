@@ -2,10 +2,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from prefect.variables import Variable
-
-from data_integration.config.loader import read_config_file, validate_config_payload
+from data_integration.config.loader import ensure_config_variable
 from data_integration.config.schema import IntegrationConfig
+from data_integration.flows.controller import resolve_bootstrap_path
 from data_integration.logging_setup import log_fields, task_logger
 from data_integration.prefect_ui import (
     TASK_ARCHIVE,
@@ -16,8 +15,7 @@ from data_integration.prefect_ui import (
     source_step_name,
 )
 from data_integration.runtime.locks import FlowAlreadyRunningError, integration_lock
-from data_integration.storage.db import build_engine, build_session_factory, init_db
-from data_integration.storage.repository import IntegrationRepository
+from data_integration.storage.db import open_repository
 from data_integration.tasks.archive import archive_files
 from data_integration.tasks.classify import ClassificationRunError, classify_files
 from data_integration.tasks.retention import apply_retention
@@ -27,18 +25,18 @@ _LOGGER = task_logger(__name__)
 
 
 def run_integration(
-    config_variable: str | None = None,
-    config_path: str | None = None,
+    *,
+    config_variable: str,
+    bootstrap_path: str | None = None,
     source_name: str | None = None,
 ) -> str | None:
-    config_ref = config_path or config_variable or "unknown"
     logger = _LOGGER
-    config = _read_integration_config(config_variable=config_variable, config_path=config_path)
+    config = load_source_config(config_variable=config_variable, bootstrap_path=bootstrap_path)
     logger.info(
         "Starting data integration | %s",
         log_fields(
             source=source_name or "-",
-            config=config_ref,
+            config=config_variable,
             lock=config.directories.lock_file,
             no_overlap=config.runtime.no_overlap,
         ),
@@ -79,10 +77,7 @@ def _run_integration_steps(
         _source_task(classify_files, source_name, TASK_CLASSIFY)(config, run_id)
 
         logger.info("Step 3/4: validate and prepublish | %s", log_fields(run_id=run_id))
-        _source_task(prepublish_files, source_name, TASK_PREPUBLISH)(
-            config,
-            run_id,
-        )
+        _source_task(prepublish_files, source_name, TASK_PREPUBLISH)(config, run_id)
 
         logger.info("Step 4/4: archive retention cleanup | %s", log_fields(run_id=run_id))
         deleted = _source_task(apply_retention, source_name, TASK_RETENTION)(config)
@@ -112,9 +107,7 @@ def _run_integration_steps(
 
 
 def _log_run_summary(config: IntegrationConfig, run_id: str, logger: Any) -> None:
-    engine = build_engine(config.directories.sqlite_path)
-    init_db(engine)
-    repository = IntegrationRepository(build_session_factory(engine))
+    repository = open_repository(config.directories.sqlite_path)
     run = repository.get_run(run_id)
     summary = repository.summarize_run(run_id)
     logger.info(
@@ -123,22 +116,13 @@ def _log_run_summary(config: IntegrationConfig, run_id: str, logger: Any) -> Non
     )
 
 
-def _read_integration_config(
+def load_source_config(
     *,
-    config_variable: str | None = None,
-    config_path: str | Path | None = None,
+    config_variable: str,
+    bootstrap_path: str | Path | None = None,
 ) -> IntegrationConfig:
-    if config_path is not None:
-        return read_config_file(config_path)
-    if config_variable is None:
-        raise ValueError("Either config_variable or config_path must be provided")
-
-    raw_config = Variable.get(config_variable, default=None)
-    if raw_config is None:
-        raise ValueError(f"Prefect Variable not found: {config_variable}")
-    if isinstance(raw_config, str):
-        raw_config = json.loads(raw_config)
-    return validate_config_payload(raw_config)
+    resolved_bootstrap = resolve_bootstrap_path(config_variable, bootstrap_path)
+    return ensure_config_variable(config_variable, resolved_bootstrap)
 
 
 def _source_task(task_fn: Any, source_name: str | None, task_name: str) -> Any:

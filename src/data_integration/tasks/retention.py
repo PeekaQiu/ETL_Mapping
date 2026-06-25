@@ -9,7 +9,7 @@ from prefect import task
 from data_integration.config.schema import IntegrationConfig
 from data_integration.logging_setup import log_fields, task_logger
 from data_integration.prefect_ui import TASK_RETENTION, TASK_RETENTION_DESC
-from data_integration.storage.db import build_engine, build_session_factory, init_db
+from data_integration.storage.db import open_repository
 from data_integration.storage.repository import IntegrationRepository
 
 _LOGGER = task_logger(__name__)
@@ -17,9 +17,7 @@ _LOGGER = task_logger(__name__)
 
 @task(name=TASK_RETENTION, description=TASK_RETENTION_DESC, retries=0)
 def apply_retention(config: IntegrationConfig) -> int:
-    engine = build_engine(config.directories.sqlite_path)
-    init_db(engine)
-    repository = IntegrationRepository(build_session_factory(engine))
+    repository = open_repository(config.directories.sqlite_path)
     return retention_run_impl(config, repository)
 
 

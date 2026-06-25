@@ -5,22 +5,18 @@ import logging
 import signal
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
-from data_integration.config.loader import (
-    DEFAULT_CONTROLLER_VAR,
-    DEFAULT_CONTROLLER_PATH,
-)
-from data_integration.flows.controller import (
-    load_controller as _load_controller,
-    project_root as _project_root,
-    resolve_project_path as _resolve_project_path,
-)
-from data_integration.logging_setup import configure_logging as _configure_logging
+from data_integration.config.loader import DEFAULT_CONTROLLER_PATH, DEFAULT_CONTROLLER_VAR
+from data_integration.config.schema import BulkIntegrationConfig
+from data_integration.flows.controller import load_controller_variable, project_root, resolve_project_path
+from data_integration.logging_setup import configure_logging, log_fields
 
 
 def bootstrap() -> Path:
-    root = _project_root()
+    root = project_root()
     src_path = root / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
@@ -30,15 +26,6 @@ def bootstrap() -> Path:
         os.chdir(root)
     logging.getLogger(__name__).debug("Bootstrapped project root | path=%s", root)
     return root
-
-
-def configure_logging(verbose: bool) -> None:
-    _configure_logging(verbose=verbose)
-
-
-def resolve_path(path: str | Path, *, project_root: Path | None = None) -> Path:
-    root = project_root or _project_root()
-    return _resolve_project_path(path, root)
 
 
 class GracefulStop:
@@ -81,7 +68,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--controller",
         default=DEFAULT_CONTROLLER_PATH,
-        help="Bulk controller config file path.",
+        help="Controller bootstrap config file path (used only when Prefect Variable is missing).",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
 
@@ -106,9 +93,88 @@ def add_loop_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def load_controller(controller_path: Path):
-    return _load_controller(controller_path)
+def load_controller(controller_bootstrap_path: Path, *, project_root_path: Path | None = None) -> BulkIntegrationConfig:
+    root = project_root_path or project_root()
+    return load_controller_variable(
+        variable_name=DEFAULT_CONTROLLER_VAR,
+        bootstrap_path=controller_bootstrap_path,
+        project_root_path=root,
+    )
 
 
-def default_controller_variable() -> str:
-    return DEFAULT_CONTROLLER_VAR
+def resolve_path(path: str | Path, *, project_root_path: Path | None = None) -> Path:
+    return resolve_project_path(path, project_root_path or project_root())
+
+
+def loop_settings(args: argparse.Namespace, controller: BulkIntegrationConfig) -> tuple[int, int | None, bool]:
+    delay_seconds = args.delay_seconds if args.delay_seconds is not None else controller.loop.delay_seconds
+    max_cycles = 1 if args.once else args.cycles
+    if max_cycles is None:
+        max_cycles = controller.loop.cycles
+    stop_on_failure = args.stop_on_failure or controller.loop.stop_on_failure
+    return delay_seconds, max_cycles, stop_on_failure
+
+
+def run_scheduled_loop(
+    *,
+    args: argparse.Namespace,
+    project_root_path: Path,
+    controller_path: Path,
+    controller: BulkIntegrationConfig,
+    cycle_label: str,
+    run_cycle: Callable[[], Any],
+    log_cycle_result: Callable[[Any], None],
+) -> int:
+    logger = logging.getLogger(__name__)
+    delay_seconds, max_cycles, stop_on_failure = loop_settings(args, controller)
+    logger.info(
+        "%s loop configured | %s",
+        cycle_label,
+        log_fields(
+            controller=controller_path,
+            delay_seconds=delay_seconds,
+            max_cycles=max_cycles or "unlimited",
+            stop_on_failure=stop_on_failure,
+        ),
+    )
+
+    stop = GracefulStop()
+    stop.install()
+    cycle = 0
+    cycle_failed = False
+    try:
+        while not stop.requested():
+            cycle += 1
+            logger.info("Starting %s cycle %s.", cycle_label.lower(), cycle)
+            cycle_failed = False
+            try:
+                result = run_cycle()
+            except Exception:
+                logger.exception("%s cycle flow failed.", cycle_label)
+                cycle_failed = True
+                if stop_on_failure:
+                    return 1
+            else:
+                log_cycle_result(result)
+
+            if max_cycles is not None and cycle >= max_cycles:
+                logger.info("Reached configured cycle limit: %s.", max_cycles)
+                break
+            if args.once or stop.requested():
+                break
+
+            logger.info(
+                "%s cycle %s finished; sleeping %s second(s).",
+                cycle_label,
+                cycle,
+                delay_seconds,
+            )
+            stop.sleep(delay_seconds)
+    finally:
+        stop.restore()
+
+    if stop.requested():
+        logger.info("%s loop stopped by signal.", cycle_label)
+        return 130
+    logger.info("%s loop exited normally.", cycle_label)
+    return 1 if cycle_failed else 0

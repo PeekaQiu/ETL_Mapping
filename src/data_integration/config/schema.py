@@ -47,6 +47,7 @@ class DirectoryConfig(BaseModel):
 
 class RuntimeConfig(BaseModel):
     file_stability_seconds: int = Field(default=5, ge=0)
+    prepublish_observation_seconds: int = Field(default=0, ge=0)
     archive_retention_days: int = Field(default=30, ge=0)
     detail_retention_days: int | None = Field(default=90, ge=0)
     cleanup_empty_dirs: bool = True

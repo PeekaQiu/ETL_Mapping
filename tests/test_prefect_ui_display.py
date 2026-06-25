@@ -1,9 +1,6 @@
-from data_integration.flows.config_refresh import refresh_config
 from data_integration.flows.integration_loop import run_integration_cycle
 from data_integration.flows.publish import run_publish_cycle
 from data_integration.prefect_ui import (
-    FLOW_CONFIG_REFRESH,
-    FLOW_CONFIG_REFRESH_DESC,
     FLOW_INTEGRATION_LOOP,
     FLOW_INTEGRATION_LOOP_DESC,
     FLOW_PUBLISH_LOOP,
@@ -32,8 +29,6 @@ from data_integration.tasks.validate import prepublish_files
 
 
 def test_prefect_flows_have_business_names_and_descriptions() -> None:
-    assert refresh_config.name == FLOW_CONFIG_REFRESH
-    assert refresh_config.description == FLOW_CONFIG_REFRESH_DESC
     assert run_integration_cycle.name == FLOW_INTEGRATION_LOOP
     assert run_integration_cycle.description == FLOW_INTEGRATION_LOOP_DESC
     assert run_publish_cycle.name == FLOW_PUBLISH_LOOP

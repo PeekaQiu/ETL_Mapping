@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 
 from data_integration.config.schema import IntegrationConfig
@@ -5,6 +6,7 @@ from data_integration.storage.db import build_engine, build_session_factory, ini
 from data_integration.storage.models import FileStatus, ProcessingRunStatus
 from data_integration.storage.repository import IntegrationRepository
 from data_integration.files.safety import sha256_file
+from data_integration.tasks import publish as publish_module
 from data_integration.tasks.publish import publish_run_impl
 from data_integration.tasks.archive import archive_run_impl
 from data_integration.tasks.classify import classify_run_impl
@@ -72,6 +74,127 @@ def test_pipeline_prepublishes_before_scheduled_publish(tmp_path: Path) -> None:
     assert (config.directories.output_root / "invoice" / "invoice.xml").exists()
     assert published_file.prepublish_path is not None
     assert not Path(published_file.prepublish_path).exists()
+
+
+def test_prepublish_observation_defers_immediate_publish(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path, prepublish_observation_seconds=300)
+    source_dir = config.directories.source_dirs[0]
+    source_dir.mkdir(parents=True)
+    (source_dir / "invoice.xml").write_text(
+        "<Document><Type>INVOICE</Type><Amount>42.50</Amount></Document>",
+        encoding="utf-8",
+    )
+    repository = _repository(config)
+
+    run_id = archive_run_impl(config, repository)
+    assert run_id is not None
+    classify_run_impl(config, repository, run_id)
+    prepublish_run_impl(config, repository, run_id)
+
+    prepublished_file = repository.get_run_files(run_id)[0]
+    assert prepublished_file.status == FileStatus.PREPUBLISHED.value
+    prepublish_time = prepublished_file.updated_at.replace(tzinfo=None)
+    monkeypatch.setattr(
+        publish_module,
+        "_utc_now",
+        lambda: prepublish_time + timedelta(seconds=1),
+    )
+
+    published_count = publish_run_impl(config, repository, run_id=run_id)
+
+    assert published_count == 0
+    assert repository.get_run_files(run_id)[0].status == FileStatus.PREPUBLISHED.value
+    assert repository.get_run(run_id).status == ProcessingRunStatus.PREPUBLISHED.value
+    assert not (config.directories.output_root / "invoice" / "invoice.xml").exists()
+
+
+def test_prepublish_observation_allows_publish_after_window(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path, prepublish_observation_seconds=300)
+    source_dir = config.directories.source_dirs[0]
+    source_dir.mkdir(parents=True)
+    (source_dir / "invoice.xml").write_text(
+        "<Document><Type>INVOICE</Type><Amount>42.50</Amount></Document>",
+        encoding="utf-8",
+    )
+    repository = _repository(config)
+
+    run_id = archive_run_impl(config, repository)
+    assert run_id is not None
+    classify_run_impl(config, repository, run_id)
+    prepublish_run_impl(config, repository, run_id)
+
+    prepublish_time = repository.get_run_files(run_id)[0].updated_at.replace(tzinfo=None)
+    monkeypatch.setattr(
+        publish_module,
+        "_utc_now",
+        lambda: prepublish_time + timedelta(seconds=301),
+    )
+    published_count = publish_run_impl(config, repository, run_id=run_id)
+
+    assert published_count == 1
+    assert repository.get_run_files(run_id)[0].status == FileStatus.PUBLISHED.value
+    assert repository.get_run(run_id).status == ProcessingRunStatus.PUBLISHED.value
+    assert (config.directories.output_root / "invoice" / "invoice.xml").exists()
+
+
+def test_prepublish_observation_zero_preserves_immediate_publish(tmp_path: Path) -> None:
+    config = _config(tmp_path, prepublish_observation_seconds=0)
+    source_dir = config.directories.source_dirs[0]
+    source_dir.mkdir(parents=True)
+    (source_dir / "invoice.xml").write_text(
+        "<Document><Type>INVOICE</Type><Amount>42.50</Amount></Document>",
+        encoding="utf-8",
+    )
+    repository = _repository(config)
+
+    run_id = archive_run_impl(config, repository)
+    assert run_id is not None
+    classify_run_impl(config, repository, run_id)
+    prepublish_run_impl(config, repository, run_id)
+
+    published_count = publish_run_impl(config, repository, run_id=run_id)
+
+    assert published_count == 1
+    assert repository.get_run_files(run_id)[0].status == FileStatus.PUBLISHED.value
+
+
+def test_prepublish_observation_supersede_during_window(tmp_path: Path, monkeypatch) -> None:
+    config_v1 = _config(tmp_path, config_revision=1, prepublish_observation_seconds=300)
+    source_dir = config_v1.directories.source_dirs[0]
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "invoice.xml"
+    source_path.write_text("<Document><Type>INVOICE</Type><Rev>1</Rev></Document>", encoding="utf-8")
+    repository = _repository(config_v1)
+
+    first_run_id = archive_run_impl(config_v1, repository)
+    assert first_run_id is not None
+    classify_run_impl(config_v1, repository, first_run_id)
+    prepublish_run_impl(config_v1, repository, first_run_id)
+
+    config_v2 = _config(tmp_path, config_revision=2, prepublish_observation_seconds=300)
+    source_path.write_text("<Document><Type>INVOICE</Type><Rev>2</Rev></Document>", encoding="utf-8")
+    second_run_id = archive_run_impl(config_v2, repository)
+    assert second_run_id is not None
+    classify_run_impl(config_v2, repository, second_run_id)
+    prepublish_run_impl(config_v2, repository, second_run_id)
+
+    second_file = repository.get_run_files(second_run_id)[0]
+    prepublish_time = second_file.updated_at.replace(tzinfo=None)
+    monkeypatch.setattr(
+        publish_module,
+        "_utc_now",
+        lambda: prepublish_time + timedelta(seconds=1),
+    )
+
+    published_count = publish_run_impl(config_v2, repository)
+
+    first_file = repository.get_run_files(first_run_id)[0]
+    second_file = repository.get_run_files(second_run_id)[0]
+    assert published_count == 0
+    assert first_file.status == FileStatus.SUPERSEDED.value
+    assert first_file.superseded_by_file_id == second_file.id
+    assert second_file.status == FileStatus.PREPUBLISHED.value
+    assert not (config_v2.directories.output_root / "invoice" / "invoice.xml").exists()
 
 
 def test_newer_replace_run_wins_formal_publish(tmp_path: Path) -> None:

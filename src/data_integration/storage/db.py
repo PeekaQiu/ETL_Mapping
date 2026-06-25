@@ -6,6 +6,7 @@ from sqlalchemy import Engine, create_engine, inspect
 from sqlalchemy.orm import Session, sessionmaker
 
 from data_integration.storage.models import Base
+from data_integration.storage.repository import IntegrationRepository
 
 
 def build_engine(sqlite_path: Path) -> Engine:
@@ -25,6 +26,12 @@ def init_db(engine: Engine) -> None:
 
 def build_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)
+
+
+def open_repository(sqlite_path: Path) -> IntegrationRepository:
+    engine = build_engine(sqlite_path)
+    init_db(engine)
+    return IntegrationRepository(build_session_factory(engine))
 
 
 def _ensure_files_schema(engine: Engine) -> None:

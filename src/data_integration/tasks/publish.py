@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,7 @@ from data_integration.config.schema import IntegrationConfig
 from data_integration.files.safety import move_to_quarantine, promote_file, sha256_file
 from data_integration.logging_setup import log_fields, task_logger
 from data_integration.prefect_ui import TASK_FORMAL_PUBLISH, TASK_FORMAL_PUBLISH_DESC
-from data_integration.storage.db import build_engine, build_session_factory, init_db
+from data_integration.storage.db import open_repository
 from data_integration.storage.models import FileRecord, FileStatus, ProcessingRunStatus
 from data_integration.storage.repository import IntegrationRepository
 
@@ -20,9 +21,7 @@ _BACKLOG_WARN_AT = 1000
 
 @task(name=TASK_FORMAL_PUBLISH, description=TASK_FORMAL_PUBLISH_DESC, retries=0)
 def publish_files(config: IntegrationConfig, run_id: str | None = None) -> int:
-    engine = build_engine(config.directories.sqlite_path)
-    init_db(engine)
-    repository = IntegrationRepository(build_session_factory(engine))
+    repository = open_repository(config.directories.sqlite_path)
     return publish_run_impl(config, repository, run_id=run_id)
 
 
@@ -61,7 +60,9 @@ def publish_run_impl(
     failures: list[str] = []
     published_count = 0
     superseded_count = 0
+    deferred_count = 0
     touched_run_ids: set[str] = set()
+    observation_seconds = config.runtime.prepublish_observation_seconds
 
     for record in sorted(prepublished_files, key=_publish_sort_key):
         touched_run_ids.add(record.run_id)
@@ -84,6 +85,18 @@ def publish_run_impl(
                     run_id=record.run_id,
                     source=source_name,
                     superseded_by=superseding_record.id,
+                ),
+            )
+            continue
+
+        if not _observation_satisfied(record, observation_seconds):
+            deferred_count += 1
+            logger.debug(
+                "Deferred formal publish; observation window not satisfied | %s",
+                log_fields(
+                    run_id=record.run_id,
+                    source=source_name,
+                    observation_seconds=observation_seconds,
                 ),
             )
             continue
@@ -139,14 +152,34 @@ def publish_run_impl(
                 pending=len(prepublished_files),
                 failed=len(failures),
                 superseded=superseded_count,
+                deferred=deferred_count,
             ),
         )
     else:
         logger.info(
             "Formal publish complete | %s",
-            log_fields(scope=scope, published=published_count, superseded=superseded_count),
+            log_fields(
+                scope=scope,
+                published=published_count,
+                superseded=superseded_count,
+                deferred=deferred_count,
+            ),
         )
     return published_count
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _observation_satisfied(record: FileRecord, observation_seconds: int, *, now: datetime | None = None) -> bool:
+    if observation_seconds <= 0:
+        return True
+    current = now or _utc_now()
+    updated_at = record.updated_at
+    if updated_at.tzinfo is not None:
+        updated_at = updated_at.replace(tzinfo=None)
+    return (current - updated_at).total_seconds() >= observation_seconds
 
 
 def _list_prepublished(

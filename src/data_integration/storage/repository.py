@@ -29,6 +29,17 @@ class TargetCollisionError(RuntimeError):
     pass
 
 
+class SourcePathReplacementError(RuntimeError):
+    """Same source path changed content without a config_revision bump."""
+
+
+REPLACEMENT_WITHOUT_REVISION_PREFIX = "same source path replaced without config_revision bump"
+
+
+def is_revision_policy_rejection(message: str | None) -> bool:
+    return bool(message and message.startswith(REPLACEMENT_WITHOUT_REVISION_PREFIX))
+
+
 _RETRYABLE_FILE_STATUSES = frozenset(
     {FileStatus.QUARANTINED.value, FileStatus.FAILED.value}
 )
@@ -50,6 +61,9 @@ _TERMINAL_RETENTION_STATUSES = (
     FileStatus.PUBLISHED,
     FileStatus.QUARANTINED,
     FileStatus.FAILED,
+)
+_NON_CONFLICTING_STATUSES = frozenset(
+    _RETRYABLE_FILE_STATUSES | _SUPERSEDED_FILE_STATUSES | {FileStatus.DISCOVERED.value}
 )
 
 
@@ -75,19 +89,88 @@ class IntegrationRepository:
             session.expunge(run)
             return run
 
+    def get_latest_run_config_snapshot(self) -> dict | None:
+        with self._session_factory() as session:
+            run = session.scalar(
+                select(ProcessingRun)
+                .where(ProcessingRun.config_snapshot.is_not(None))
+                .order_by(ProcessingRun.created_at.desc(), ProcessingRun.id.desc())
+            )
+            if run is None or not run.config_snapshot:
+                return None
+            return dict(run.config_snapshot)
+
+    def find_conflicting_source_revision(
+        self,
+        source_path: Path,
+        sha256: str,
+        *,
+        config_revision: int,
+    ) -> FileRecord | None:
+        """Return an existing record when the same path already has different content at this revision."""
+        with self._session_factory() as session:
+            stmt = (
+                select(FileRecord)
+                .where(
+                    FileRecord.source_path == str(source_path),
+                    FileRecord.config_revision == config_revision,
+                    FileRecord.sha256 != sha256,
+                    ~FileRecord.status.in_(_NON_CONFLICTING_STATUSES),
+                )
+                .order_by(FileRecord.id.desc())
+            )
+            record = session.scalar(stmt)
+            if record is None:
+                return None
+            session.expunge(record)
+            return record
+
+    def record_rejected_replacement(
+        self,
+        *,
+        run_id: str,
+        source_path: Path,
+        archive_path: Path,
+        sha256: str,
+        size_bytes: int,
+        config_revision: int,
+        quarantine_path: Path,
+        message: str,
+        conflicting_file_id: int | None = None,
+    ) -> FileRecord:
+        if conflicting_file_id is not None:
+            message = f"{message} (conflicts with file_id={conflicting_file_id})"
+        with self._session_factory.begin() as session:
+            record = FileRecord(
+                run_id=run_id,
+                source_path=str(source_path),
+                archive_path=str(archive_path),
+                sha256=sha256,
+                size_bytes=size_bytes,
+                config_revision=config_revision,
+                quarantine_path=str(quarantine_path),
+                status=FileStatus.QUARANTINED.value,
+                error_message=message,
+            )
+            session.add(record)
+            session.flush()
+            return record
+
     def has_seen_source_hash(self, source_path: Path, sha256: str, *, config_revision: int) -> bool:
         with self._session_factory() as session:
-            stmt = select(FileRecord.status).where(
+            stmt = select(FileRecord).where(
                 FileRecord.source_path == str(source_path),
                 FileRecord.sha256 == sha256,
                 FileRecord.config_revision == config_revision,
             )
-            row = session.execute(stmt).first()
-            if row is None:
+            record = session.scalar(stmt)
+            if record is None:
                 return False
-            if row[0] in _RETRYABLE_FILE_STATUSES:
+            if record.status in _RETRYABLE_FILE_STATUSES:
+                if is_revision_policy_rejection(record.error_message):
+                    return True
                 return False
-            return row[0] != FileStatus.DISCOVERED.value
+            return record.status != FileStatus.DISCOVERED.value
 
     def reserve_discovered_file(
         self,

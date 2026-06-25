@@ -18,7 +18,7 @@ from data_integration.files.safety import (
 from data_integration.logging_setup import log_fields, task_logger
 from data_integration.prefect_ui import TASK_CLASSIFY, TASK_CLASSIFY_DESC
 from data_integration.rules.engine import RuleEvaluationError, classify_xml_file
-from data_integration.storage.db import build_engine, build_session_factory, init_db
+from data_integration.storage.db import open_repository
 from data_integration.storage.models import FileStatus, ProcessingRunStatus, RuleMatchStatus
 from data_integration.storage.repository import (
     IntegrationRepository,
@@ -34,9 +34,7 @@ class ClassificationRunError(RuntimeError):
 
 @task(name=TASK_CLASSIFY, description=TASK_CLASSIFY_DESC, retries=1, retry_delay_seconds=10)
 def classify_files(config: IntegrationConfig, run_id: str) -> str:
-    engine = build_engine(config.directories.sqlite_path)
-    init_db(engine)
-    repository = IntegrationRepository(build_session_factory(engine))
+    repository = open_repository(config.directories.sqlite_path)
     return classify_run_impl(config, repository, run_id)
 
 

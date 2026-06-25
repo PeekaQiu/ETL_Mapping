@@ -83,6 +83,17 @@ def move_to_quarantine(source: Path, quarantine_root: Path, run_id: str, reason:
     return destination
 
 
+def copy_to_quarantine(source: Path, quarantine_root: Path, run_id: str, reason: str) -> Path:
+    """Copy a readonly upstream source file into quarantine without mutating source."""
+    safe_reason = sanitize_path_token(reason) or "unknown"
+    destination_dir = quarantine_root / run_id / safe_reason
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = unique_destination(destination_dir / source.name)
+    if source.exists():
+        copy_verify(source, destination, sha256_file(source))
+    return destination
+
+
 def unique_destination(path: Path) -> Path:
     if not path.exists():
         return path

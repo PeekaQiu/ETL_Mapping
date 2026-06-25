@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 # Flows
-FLOW_CONFIG_REFRESH = "config-refresh"
-FLOW_CONFIG_REFRESH_DESC = "Validate integration settings and sync them to Prefect."
-
 FLOW_INTEGRATION_LOOP = "integration-loop"
 FLOW_INTEGRATION_LOOP_DESC = "Process new XML files for every enabled data source."
 

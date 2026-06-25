@@ -7,7 +7,9 @@ from typing import Any
 from pydantic import ValidationError
 from prefect.variables import Variable
 
+from data_integration.config.guardrails import validate_config_patch
 from data_integration.config.schema import BulkIntegrationConfig, IntegrationConfig
+from data_integration.storage.db import open_repository
 
 
 DEFAULT_CONTROLLER_VAR = "bulk_sources_controller"
@@ -72,58 +74,50 @@ def set_bulk_config_variable(
     )
 
 
-def load_config_var(
-    config_path: str | Path,
-    *,
+def bootstrap_config_variable(
     variable_name: str,
-    overwrite: bool = False,
+    bootstrap_path: str | Path,
+    *,
+    bootstrap_config: IntegrationConfig | None = None,
 ) -> IntegrationConfig:
-    config = read_config_file(config_path)
-    set_config_variable(config, variable_name=variable_name, overwrite=overwrite)
+    config = bootstrap_config or read_config_file(bootstrap_path)
+    set_config_variable(config, variable_name=variable_name, overwrite=False)
     return config
 
 
-def load_bulk_config_var(
-    config_path: str | Path,
-    *,
-    variable_name: str = DEFAULT_CONTROLLER_VAR,
-    overwrite: bool = False,
+def bootstrap_bulk_config_variable(
+    variable_name: str,
+    bootstrap_path: str | Path,
 ) -> BulkIntegrationConfig:
-    config = read_bulk_config_file(config_path)
-    set_bulk_config_variable(config, variable_name=variable_name, overwrite=overwrite)
+    config = read_bulk_config_file(bootstrap_path)
+    set_bulk_config_variable(config, variable_name=variable_name, overwrite=False)
     return config
 
 
-def load_source_config_vars(
-    mappings: dict[str, str | Path],
+def ensure_config_variable(
+    variable_name: str,
+    bootstrap_path: str | Path,
     *,
-    overwrite: bool = False,
-) -> dict[str, IntegrationConfig]:
-    initialized: dict[str, IntegrationConfig] = {}
-    for variable_name, config_path in mappings.items():
-        initialized[variable_name] = load_config_var(
-            config_path,
-            variable_name=variable_name,
-            overwrite=overwrite,
+    bootstrap_config: IntegrationConfig | None = None,
+) -> IntegrationConfig:
+    raw_config = Variable.get(variable_name, default=None)
+    if raw_config is None:
+        return bootstrap_config_variable(
+            variable_name,
+            bootstrap_path,
+            bootstrap_config=bootstrap_config,
         )
-    return initialized
+    return validate_config_payload(_decode_variable(raw_config))
 
 
-def load_bulk_sources(
-    *,
-    controller_config_path: str | Path = DEFAULT_CONTROLLER_PATH,
-    controller_variable_name: str = DEFAULT_CONTROLLER_VAR,
-    source_config_files: dict[str, str | Path] | None = None,
-    overwrite: bool = False,
-) -> tuple[dict[str, IntegrationConfig], BulkIntegrationConfig]:
-    source_mappings = source_config_files or DEFAULT_SOURCE_CONFIGS
-    initialized_sources = load_source_config_vars(source_mappings, overwrite=overwrite)
-    controller = load_bulk_config_var(
-        controller_config_path,
-        variable_name=controller_variable_name,
-        overwrite=overwrite,
-    )
-    return initialized_sources, controller
+def ensure_bulk_config_variable(
+    variable_name: str,
+    bootstrap_path: str | Path,
+) -> BulkIntegrationConfig:
+    raw_config = Variable.get(variable_name, default=None)
+    if raw_config is None:
+        return bootstrap_bulk_config_variable(variable_name, bootstrap_path)
+    return validate_bulk_config_payload(_decode_variable(raw_config))
 
 
 def update_config_variable(
@@ -137,6 +131,8 @@ def update_config_variable(
     current = validate_config_payload(_decode_variable(raw_config))
     updated_payload = _deep_merge(current.snapshot(), patch)
     updated = validate_config_payload(updated_payload)
+    repository = open_repository(current.directories.sqlite_path)
+    validate_config_patch(current, updated, repository=repository)
     set_config_variable(updated, variable_name=variable_name, overwrite=True)
     return updated
 
